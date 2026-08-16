@@ -66,5 +66,6 @@ jobs:
           import agentbench
           flags = agentbench.detect_integrations()
           assert set(flags) == {"promptgraph", "agentgear", "skillguard", "projectkaizen"}
+          assert all(v is False for v in flags.values()), flags
           print("Standalone API OK; integrations:", flags)
           PY

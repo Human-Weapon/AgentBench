@@ -2,14 +2,19 @@
 
 ## Reporting a vulnerability
 
-If you discover a security issue, **do not open a public issue**. Contact the maintainers (address TBD once the repo is published) with:
+If you discover a potential vulnerability, avoid posting sensitive exploit
+details publicly. Open a minimal issue requesting a private reporting channel,
+or use GitHub Private Vulnerability Reporting if it is enabled for this
+repository.
+
+Please include:
 
 - a description of the issue
 - steps to reproduce
 - affected versions
 - any suggested fix
 
-We will acknowledge receipt within 48 hours and work toward a coordinated disclosure.
+There is no dedicated security email for this project.
 
 ## Threat model (be precise)
 

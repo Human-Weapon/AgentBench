@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
-    { name = "HERMES OSS", email = "oss@hermes.local" },
+    { name = "Human-Weapon" },
 ]
 keywords = ["ai", "agents", "benchmark", "evaluation", "regression", "metrics"]
 classifiers = [
@@ -53,6 +53,14 @@ pythonpath = ["src"]
 line-length = 100
 target-version = "py310"
 src = ["src"]
+extend-exclude = [
+    "*.md",
+    "docs",
+    "CHANGELOG.md",
+    "README.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
