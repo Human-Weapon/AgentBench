@@ -102,3 +102,48 @@ def test_status_standalone() -> None:
     assert main(["status", "--json"]) == 0
     flags = detect_integrations()
     assert set(flags) == {"promptgraph", "agentgear", "skillguard", "projectkaizen"}
+
+
+def test_cli_run_survives_cp1252_stdout(tmp_path: Path, monkeypatch) -> None:
+    """Windows CI: default console is cp1252 and cannot encode U+2192."""
+    import io
+    import sys
+
+    from agentbench.cli import _emit
+
+    class _Cp1252:
+        encoding = "cp1252"
+
+        def __init__(self) -> None:
+            self.buffer = io.BytesIO()
+
+        def write(self, text: str) -> int:
+            self.buffer.write(text.encode("cp1252", errors="strict"))
+            return len(text)
+
+        def flush(self) -> None:
+            pass
+
+    _emit("ok")  # smoke the helper
+    sink = _Cp1252()
+    monkeypatch.setattr(sys, "stdout", sink)
+    _emit("arrow → and delta Δ")
+    decoded = sink.buffer.getvalue().decode("cp1252")
+    assert "arrow" in decoded
+    assert "delta" in decoded
+
+    suite = {
+        "id": "enc",
+        "cases": [{"id": "c", "name": "c"}],
+        "variants": [{"id": "v", "name": "v"}],
+        "target": {"type": "command", "argv": [sys.executable, "-c", "print(0)"]},
+        "budget": {"per_run_timeout_seconds": 10},
+    }
+    path = tmp_path / "suite.json"
+    path.write_text(json.dumps(suite), encoding="utf-8")
+    sink = _Cp1252()
+    monkeypatch.setattr(sys, "stdout", sink)
+    assert main(["run", str(path), "-o", str(tmp_path / "out")]) == 0
+    text = sink.buffer.getvalue().decode("cp1252")
+    assert "runs ->" in text
+    assert "\u2192" not in text

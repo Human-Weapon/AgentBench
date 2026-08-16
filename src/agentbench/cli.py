@@ -18,6 +18,22 @@ from .runner import ExperimentRunner, ExperimentSpec
 from .siblings import detect_integrations, sibling_versions
 
 
+def _emit(text: str, *, file=None) -> None:
+    """Print text even when the console encoding cannot represent every glyph."""
+    stream = file if file is not None else sys.stdout
+    try:
+        print(text, file=stream)
+    except UnicodeEncodeError:
+        encoding = getattr(stream, "encoding", None) or "ascii"
+        payload = (text + "\n").encode(encoding, errors="replace")
+        buffer = getattr(stream, "buffer", None)
+        if buffer is not None:
+            buffer.write(payload)
+            buffer.flush()
+        else:
+            print(payload.decode(encoding, errors="replace"), file=stream, end="")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agentbench",
@@ -77,9 +93,9 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     if args.as_json:
         print(json.dumps(payload, indent=2))
     else:
-        print(
+        _emit(
             f"ok: suite {suite.id} "
-            f"({len(suite.cases)} cases × {len(suite.variants)} variants × "
+            f"({len(suite.cases)} cases x {len(suite.variants)} variants x "
             f"{suite.repetitions} reps = {suite.planned_runs()} runs)"
         )
     return 0
@@ -122,9 +138,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if args.as_json:
         print(json.dumps(payload, indent=2))
     else:
-        print(f"ran {payload['runs']} runs → {payload['output']}")
+        _emit(f"ran {payload['runs']} runs -> {payload['output']}")
         if outcome.stopped_reason:
-            print(f"stopped: {outcome.stopped_reason}")
+            _emit(f"stopped: {outcome.stopped_reason}")
     if outcome.comparison and outcome.comparison.get("hard_gate_passed") is False:
         return 5
     return 0
@@ -148,13 +164,14 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     if args.as_json:
         print(json.dumps(result, indent=2))
     else:
-        print(f"baseline: {result['baseline']}")
-        print(f"hard gates: {'passed' if result['hard_gate_passed'] else 'failed'}")
+        _emit(f"baseline: {result['baseline']}")
+        _emit(f"hard gates: {'passed' if result['hard_gate_passed'] else 'failed'}")
         for block in result["comparisons"]:
-            print(f"candidate {block['candidate']}")
+            _emit(f"candidate {block['candidate']}")
             for metric in block["metrics"]:
-                print(
-                    f"  {metric['metric']}: {metric['classification']} Δ={metric['absolute_delta']}"
+                _emit(
+                    f"  {metric['metric']}: {metric['classification']} "
+                    f"delta={metric['absolute_delta']}"
                 )
     return 0 if result["hard_gate_passed"] else 5
 
@@ -176,7 +193,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
     if args.as_json:
         print(json.dumps({"report": dest, "runs": len(runs)}, indent=2))
     else:
-        print(text)
+        _emit(text)
     return 0
 
 
