@@ -1,0 +1,9 @@
+project: agentbench
+version: 0.1.0
+role: measurement
+standalone: true
+siblings:
+  promptgraph: optional
+  agentgear: optional
+  skillguard: optional
+  projectkaizen: optional

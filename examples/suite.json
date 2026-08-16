@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "id": "double-local",
+  "name": "Deterministic local doubling benchmark",
+  "description": "No network. Compares a fast cheap heuristic against a slower accurate target.",
+  "seed": 42,
+  "repetitions": 2,
+  "baseline": "fast-cheap",
+  "workspace_template": "workspace",
+  "budget": {
+    "max_runs": 16,
+    "per_run_timeout_seconds": 10,
+    "max_total_duration_seconds": 60
+  },
+  "cases": [
+    {
+      "id": "even",
+      "name": "Double an even number",
+      "payload": {"n": 4},
+      "expected": {"answer": 8},
+      "tags": ["easy"]
+    },
+    {
+      "id": "odd",
+      "name": "Double an odd number",
+      "payload": {"n": 5},
+      "expected": {"answer": 10},
+      "tags": ["harder"]
+    }
+  ],
+  "variants": [
+    {
+      "id": "fast-cheap",
+      "name": "Fast cheap heuristic",
+      "config": {"mode": "fast"}
+    },
+    {
+      "id": "slow-accurate",
+      "name": "Slow accurate",
+      "config": {"mode": "slow"}
+    }
+  ],
+  "target": {
+    "type": "command",
+    "script": "targets/dispatch.py"
+  },
+  "evaluators": [
+    {"type": "exit_code", "expected": 0}
+  ],
+  "metrics": [
+    {"name": "success", "direction": "HIGHER_IS_BETTER", "minimum": 0, "maximum": 1, "weight": 1},
+    {"name": "cost", "direction": "LOWER_IS_BETTER", "minimum": 0, "maximum": 1, "weight": 1},
+    {"name": "latency_seconds", "direction": "LOWER_IS_BETTER", "minimum": 0, "maximum": 10, "weight": 1}
+  ],
+  "regression": {
+    "baseline": "fast-cheap",
+    "rules": [
+      {
+        "metric": "success",
+        "direction": "HIGHER_IS_BETTER",
+        "absolute_threshold": 0.02,
+        "min_sample_size": 2,
+        "hard_gate": false
+      },
+      {
+        "metric": "cost",
+        "direction": "LOWER_IS_BETTER",
+        "relative_threshold": 10.0,
+        "min_sample_size": 2,
+        "hard_gate": false
+      }
+    ]
+  }
+}
