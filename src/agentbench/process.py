@@ -91,11 +91,12 @@ def run_bounded(
                     break
                 if kept < limit:
                     take = data[: limit - kept]
+                    leftover = data[len(take) :]
                     chunks.append(take)
                     kept += len(take)
-                    if kept >= limit:
+                    if leftover:
                         flags[key] = True
-                elif data:
+                else:
                     flags[key] = True
         except OSError:  # pragma: no cover - reader teardown
             return

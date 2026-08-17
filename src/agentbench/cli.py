@@ -10,7 +10,7 @@ from pathlib import Path
 
 from ._version import __version__
 from .comparison import compare
-from .config import _load_raw, load_evaluators, load_policy, load_pricing, load_suite, load_target
+from .config import load_validated_config
 from .errors import AgentBenchError, ConfigurationError, CostBoundViolationError
 from .persistence import ResultStore, load_json_object
 from .report import generate_report
@@ -84,10 +84,8 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
-    raw = _load_raw(args.suite)
-    suite = load_suite(args.suite)
-    load_evaluators(raw)
-    load_target(raw, base_dir=Path(args.suite).parent)
+    loaded = load_validated_config(args.suite)
+    suite = loaded["suite"]
     payload = {
         "ok": True,
         "suite_id": suite.id,
@@ -108,12 +106,13 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    raw = _load_raw(args.suite)
-    suite = load_suite(args.suite)
-    target = load_target(raw, base_dir=Path(args.suite).parent)
-    evaluators = load_evaluators(raw)
-    policy = load_policy(raw)
-    pricing = load_pricing(raw)
+    loaded = load_validated_config(args.suite)
+    raw = loaded["raw"]
+    suite = loaded["suite"]
+    target = loaded["target"]
+    evaluators = loaded["evaluators"]
+    policy = loaded["policy"]
+    pricing = loaded["pricing"]
     workspace = raw.get("workspace_template") or suite.workspace_template
     if workspace and not Path(workspace).is_absolute():
         workspace = str((Path(args.suite).parent / workspace).resolve())

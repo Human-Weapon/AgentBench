@@ -195,11 +195,13 @@ def write_case_files(workspace: Path, case_payload: object, variant_config: obje
     """Drop case/variant JSON into the isolated workspace (not the template)."""
     import json
 
+    from .jsonutil import to_jsonable
+
     (workspace / "case.json").write_text(
-        json.dumps(case_payload, indent=2, default=str),
+        json.dumps(to_jsonable(case_payload, name="case_payload"), indent=2, allow_nan=False),
         encoding="utf-8",
     )
     (workspace / "variant.json").write_text(
-        json.dumps(variant_config, indent=2, default=str),
+        json.dumps(to_jsonable(variant_config, name="variant_config"), indent=2, allow_nan=False),
         encoding="utf-8",
     )

@@ -15,7 +15,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .errors import ConfigurationError, CorruptResultError, PersistenceError, ValidationError
+from .errors import (
+    ConfigurationError,
+    CorruptResultError,
+    PathEscapeError,
+    PersistenceError,
+    ValidationError,
+)
+from .jsonutil import to_jsonable
 from .models import (
     SCHEMA_VERSION,
     EvaluationResult,
@@ -25,7 +32,7 @@ from .models import (
     Telemetry,
     WorkspaceDiff,
 )
-from .numbers import reject_json_constant, reject_nonfinite_tree
+from .numbers import reject_json_constant, reject_nonfinite_tree, require_bool
 from .paths import assert_existing_ancestors_contained, safe_id, validate_contained
 
 
@@ -45,7 +52,13 @@ def atomic_write_json(path: Path, payload: Mapping[str, Any], trusted_root: Path
     try:
         validate_contained(tmp_path, trusted)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True, default=str, allow_nan=False)
+            json.dump(
+                to_jsonable(dict(payload), name="persist"),
+                handle,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_path, path)
@@ -132,7 +145,18 @@ class ResultStore:
         self.root = Path(output_root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.root = self.root.resolve()
+        self._identity = os.path.realpath(self.root)
+        self._assert_identity()
         (self.root / "runs").mkdir(exist_ok=True)
+
+    def _assert_identity(self) -> None:
+        current = os.path.realpath(self.root)
+        left = os.path.normcase(current)
+        right = os.path.normcase(self._identity)
+        if left != right:
+            raise PathEscapeError(
+                f"output root identity changed: expected {self._identity}, now {current}"
+            )
 
     def run_path(self, run_id: str) -> Path:
         ident = safe_id(run_id, name="run_id")
@@ -140,18 +164,21 @@ class ResultStore:
         return validate_contained(candidate, self.root)
 
     def write_run(self, result: RunResult) -> Path:
+        self._assert_identity()
         path = self.run_path(result.run_id)
-        atomic_write_json(path, result.as_dict(), self.root)
+        atomic_write_json(path, result.as_dict(), Path(self._identity))
         return path
 
     def write_json(self, name: str, payload: Mapping[str, Any]) -> Path:
+        self._assert_identity()
         if name != Path(name).name or ".." in name or "/" in name or "\\" in name:
             raise ValidationError(f"unsafe output name: {name!r}")
-        path = validate_contained(self.root / name, self.root)
-        atomic_write_json(path, payload, self.root)
+        path = validate_contained(self.root / name, Path(self._identity))
+        atomic_write_json(path, payload, Path(self._identity))
         return path
 
     def write_text(self, name: str, text: str) -> Path:
+        self._assert_identity()
         if name != Path(name).name or ".." in name:
             raise ValidationError(f"unsafe output name: {name!r}")
         path = validate_contained(self.root / name, self.root)
@@ -203,13 +230,25 @@ def run_result_from_dict(data: Mapping[str, Any]) -> RunResult:
         status = RunStatus(target_raw["status"])
     except Exception as exc:
         raise CorruptResultError(f"invalid target status: {target_raw.get('status')!r}") from exc
-    tel_raw = target_raw.get("telemetry") or {}
+    tel_raw = target_raw.get("telemetry", {})
+    if tel_raw is None:
+        tel_raw = {}
     if not isinstance(tel_raw, Mapping):
         raise CorruptResultError("telemetry must be an object")
+    extra = tel_raw.get("extra", {})
+    if extra is None:
+        extra = {}
+    if not isinstance(extra, Mapping):
+        raise CorruptResultError("telemetry.extra must be an object")
+    artifacts = target_raw.get("artifacts", {})
+    if artifacts is None:
+        artifacts = {}
+    if not isinstance(artifacts, Mapping):
+        raise CorruptResultError("artifacts must be an object")
     try:
         telemetry = Telemetry(
             **{k: tel_raw.get(k) for k in Telemetry.__dataclass_fields__ if k != "extra"},
-            extra=tel_raw.get("extra") or {},
+            extra=extra,
         )
         target = TargetResult(
             status=status,
@@ -219,13 +258,20 @@ def run_result_from_dict(data: Mapping[str, Any]) -> RunResult:
             duration_seconds=target_raw.get("duration_seconds", 0.0),
             structured_output=target_raw.get("structured_output"),
             telemetry=telemetry,
-            artifacts=target_raw.get("artifacts") or {},
+            artifacts=artifacts,
             error_message=target_raw.get("error_message"),
-            timed_out=bool(target_raw.get("timed_out")),
-            infrastructure_error=bool(target_raw.get("infrastructure_error")),
+            timed_out=require_bool(target_raw.get("timed_out", False), name="timed_out"),
+            infrastructure_error=require_bool(
+                target_raw.get("infrastructure_error", False), name="infrastructure_error"
+            ),
         )
         evaluations = []
-        for item in data.get("evaluations") or []:
+        evals_raw = data.get("evaluations")
+        if evals_raw is None:
+            evals_raw = []
+        if not isinstance(evals_raw, list):
+            raise CorruptResultError("evaluations must be an array")
+        for item in evals_raw:
             if not isinstance(item, Mapping):
                 raise CorruptResultError("evaluation entries must be objects")
             evaluations.append(

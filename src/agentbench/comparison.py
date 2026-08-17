@@ -13,6 +13,22 @@ from .numbers import relative_delta
 from .regression import MetricRule, RegressionPolicy
 
 
+def _pair_key(run: RunResult) -> tuple[str, int, int]:
+    return (run.case_id, run.repetition, run.seed)
+
+
+def _pair_map(runs: Sequence[RunResult], *, role: str) -> dict[tuple[str, int, int], RunResult]:
+    mapped: dict[tuple[str, int, int], RunResult] = {}
+    for run in runs:
+        key = _pair_key(run)
+        if key in mapped:
+            raise ValidationError(
+                f"ambiguous {role} pair key {key}; duplicate case/repetition/seed"
+            )
+        mapped[key] = run
+    return mapped
+
+
 def _direction_for(metric: str, policy: RegressionPolicy | None) -> MetricDirection:
     if policy:
         for rule in policy.rules:
@@ -127,8 +143,8 @@ def paired_comparison(
     *,
     direction: MetricDirection,
 ) -> dict[str, Any]:
-    base_map = {(r.case_id, r.repetition): r for r in baseline_runs}
-    cand_map = {(r.case_id, r.repetition): r for r in candidate_runs}
+    base_map = _pair_map(baseline_runs, role="baseline")
+    cand_map = _pair_map(candidate_runs, role="candidate")
     keys = sorted(set(base_map) & set(cand_map))
     wins = 0
     losses = 0

@@ -2,11 +2,29 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
-from .errors import ValidationError
+from .errors import ConfigurationError, ValidationError
 from .models import MetricDirection
-from .numbers import optional_number, require_int, require_nonblank_str
+from .numbers import optional_bool, optional_number, require_int, require_nonblank_str
+
+_POLICY_KEYS = {"baseline", "rules"}
+_RULE_KEYS = {
+    "metric",
+    "direction",
+    "absolute_threshold",
+    "relative_threshold",
+    "min_sample_size",
+    "hard_gate",
+}
+
+
+def _unknown(raw: Mapping[str, Any], allowed: set[str], where: str) -> None:
+    extra = sorted(set(raw) - allowed)
+    if extra:
+        raise ConfigurationError(f"unknown {where} field(s): {extra}")
 
 
 @dataclass(frozen=True)
@@ -39,7 +57,7 @@ class MetricRule:
             require_int(self.min_sample_size, name="min_sample_size", allow_zero=False, minimum=1),
         )
         if not isinstance(self.hard_gate, bool):
-            raise ValidationError("hard_gate must be a bool")
+            raise ValidationError("hard_gate must be a JSON boolean true/false")
 
 
 @dataclass(frozen=True)
@@ -67,16 +85,31 @@ class RegressionPolicy:
         object.__setattr__(self, "rules", rules)
 
     @classmethod
-    def from_config(cls, raw: dict) -> RegressionPolicy:
-        rules = tuple(
-            MetricRule(
-                metric=item["metric"],
-                direction=item["direction"],
-                absolute_threshold=item.get("absolute_threshold"),
-                relative_threshold=item.get("relative_threshold"),
-                min_sample_size=item.get("min_sample_size", 1),
-                hard_gate=bool(item.get("hard_gate", False)),
+    def from_config(cls, raw: object) -> RegressionPolicy:
+        if not isinstance(raw, Mapping):
+            raise ConfigurationError("regression must be an object")
+        _unknown(raw, _POLICY_KEYS, "regression")
+        if "baseline" not in raw:
+            raise ConfigurationError("regression.baseline is required")
+        rules_raw = raw.get("rules")
+        if not isinstance(rules_raw, list):
+            raise ConfigurationError("regression.rules must be an array")
+        rules = []
+        for item in rules_raw:
+            if not isinstance(item, Mapping):
+                raise ConfigurationError("each regression rule must be an object")
+            _unknown(item, _RULE_KEYS, "regression rule")
+            if "metric" not in item or "direction" not in item:
+                raise ConfigurationError("regression rule requires metric and direction")
+            hard = item.get("hard_gate")
+            rules.append(
+                MetricRule(
+                    metric=item["metric"],
+                    direction=item["direction"],
+                    absolute_threshold=item.get("absolute_threshold"),
+                    relative_threshold=item.get("relative_threshold"),
+                    min_sample_size=item.get("min_sample_size", 1),
+                    hard_gate=False if hard is None else optional_bool(hard, name="hard_gate"),
+                )
             )
-            for item in raw.get("rules") or ()
-        )
-        return cls(rules=rules, baseline_variant_id=raw["baseline"])
+        return cls(rules=tuple(rules), baseline_variant_id=raw["baseline"])

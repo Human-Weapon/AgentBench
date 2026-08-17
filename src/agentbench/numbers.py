@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
+from decimal import Decimal
 from typing import Any
 
 from .errors import ValidationError
@@ -159,6 +160,45 @@ def deep_freeze(value: Any) -> Any:
     if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
         raise ValidationError("NaN/Infinity rejected in nested data")
     return value
+
+
+def require_bool(value: Any, *, name: str) -> bool:
+    """Accept only real ``bool`` values. Strings/ints are rejected."""
+    if not isinstance(value, bool):
+        raise ValidationError(
+            f"{name} must be a JSON boolean true/false; got {type(value).__name__}"
+        )
+    return value
+
+
+def optional_bool(value: Any, *, name: str, default: bool | None = None) -> bool | None:
+    if value is None:
+        return default
+    return require_bool(value, name=name)
+
+
+def money(value: Any, *, name: str) -> Decimal:
+    """Deterministic cost accounting from JSON/Python numbers."""
+    from decimal import Decimal, InvalidOperation
+
+    if isinstance(value, bool) or value is None:
+        raise ValidationError(f"{name} must be a finite number")
+    try:
+        if isinstance(value, Decimal):
+            amount = value
+        elif isinstance(value, int):
+            amount = Decimal(value)
+        elif isinstance(value, float):
+            amount = Decimal(str(value))
+        elif isinstance(value, str):
+            amount = Decimal(value)
+        else:
+            raise ValidationError(f"{name} must be a finite number; got {type(value).__name__}")
+    except (InvalidOperation, ValueError) as exc:
+        raise ValidationError(f"{name} is not a valid decimal: {value!r}") from exc
+    if not amount.is_finite():
+        raise ValidationError(f"{name} must be finite")
+    return amount
 
 
 def reject_json_constant(token: str) -> None:

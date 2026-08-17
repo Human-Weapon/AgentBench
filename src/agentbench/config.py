@@ -241,7 +241,32 @@ def load_pricing(raw: Mapping[str, Any]) -> PricingConfig | None:
     block = raw.get("pricing")
     if not block:
         return None
+    if not isinstance(block, Mapping):
+        raise ConfigurationError("pricing must be an object")
+    extra = sorted(set(block) - {"input_token_rate", "output_token_rate"})
+    if extra:
+        raise ConfigurationError(f"unknown pricing field(s): {extra}")
     return PricingConfig(
         input_token_rate=block.get("input_token_rate"),
         output_token_rate=block.get("output_token_rate"),
     )
+
+
+def load_validated_config(path: str | Path) -> dict[str, Any]:
+    """Parse every run-relevant config section. Does not execute a target."""
+    file_path = Path(path)
+    raw = _load_raw(file_path)
+    base = file_path.parent
+    suite = suite_from_dict(raw, base_dir=base)
+    target = load_target(raw, base_dir=base)
+    evaluators = load_evaluators(raw)
+    policy = load_policy(raw)
+    pricing = load_pricing(raw)
+    return {
+        "raw": raw,
+        "suite": suite,
+        "target": target,
+        "evaluators": evaluators,
+        "policy": policy,
+        "pricing": pricing,
+    }

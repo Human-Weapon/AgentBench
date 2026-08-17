@@ -8,7 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — 0.1.0 release candidate
 
 First functional release candidate. **Not tagged.** Independent adversarial
-audit of `8cf79f3` returned D. This tree is Remediation Round 1.
+audit of `8cf79f3` returned D. Second independent audit of `0ad5bfeed`
+also returned D. This tree is Remediation Round 2.
+
+### Remediation Round 2
+
+- `CommandTarget` stdin uses `to_jsonable()` so frozen mappings stay JSON
+  objects. The shipped example is 6 SUCCESS / 2 FAILURE.
+- Regression `hard_gate` accepts only JSON booleans. `validate` now
+  parses regression and pricing on the same path as `run`.
+- Output-root identity is re-checked before every persist write.
+- Persisted `telemetry=[]` (and other non-objects) is corrupt, not UNKNOWN.
+- `PythonCallableTarget` rejects `None`.
+- Paired comparison keys `(case_id, repetition, seed)` and rejects duplicates.
+- Cost ledger uses `Decimal` so `0.1+0.1+0.1` vs `0.3` does not false-exhaust.
+- Exact stdout/stderr cap `N` is not marked truncated.
 
 ### Remediation Round 1
 

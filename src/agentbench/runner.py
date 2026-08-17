@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import tempfile
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,7 @@ from .models import (
     Variant,
     make_run_id,
 )
+from .numbers import money
 from .persistence import ResultStore, assert_unused_output
 from .regression import RegressionPolicy
 from .targets import BenchmarkTarget
@@ -56,6 +58,8 @@ class BudgetLedger:
     cost_bound_violated: bool = False
     reserved_cost: float = 0.0
     unknown_reserved_cost: float = 0.0
+    _committed: Decimal = field(default_factory=lambda: Decimal("0"))
+    _reserved: Decimal = field(default_factory=lambda: Decimal("0"))
 
     def check_can_start(
         self, *, elapsed_seconds: float, remaining_timeout: float | None = None
@@ -88,37 +92,42 @@ class BudgetLedger:
                 measured=self.committed_cost,
             )
         if budget.max_total_cost is None:
+            self._reserved = Decimal("0")
             self._open_reservation = 0.0
             return
-        bound = budget.per_run_max_cost
-        if bound is None:
-            raise ValidationError("max_total_cost requires per_run_max_cost")
-        if self.committed_cost + bound > budget.max_total_cost:
+        bound = money(budget.per_run_max_cost, name="per_run_max_cost")
+        cap = money(budget.max_total_cost, name="max_total_cost")
+        if self._committed + bound > cap:
             raise BudgetExceededError(
                 f"max_total_cost={budget.max_total_cost} exhausted "
-                f"(committed={self.committed_cost}, reservation={bound})"
+                f"(committed={self.committed_cost}, reservation={budget.per_run_max_cost})"
             )
-        self.committed_cost += bound
-        self._open_reservation = bound
-        self.reserved_cost = bound
+        self._committed += bound
+        self._reserved = bound
+        self.committed_cost = float(self._committed)
+        self._open_reservation = float(bound)
+        self.reserved_cost = float(bound)
 
     def reconcile_cost(self, measured: float | None) -> None:
-        reserved = self._open_reservation
+        reserved = self._reserved
+        self._reserved = Decimal("0")
         self._open_reservation = 0.0
-        if reserved == 0.0 and measured is None:
+        if reserved == 0 and measured is None:
             return
         if measured is None:
             self.cost_known = False
-            self.unknown_reserved_cost += reserved
+            self.unknown_reserved_cost += float(reserved)
             return
-        if reserved > 0.0:
-            next_committed = self.committed_cost - reserved + measured
+        measured_d = money(measured, name="cost")
+        if reserved > 0:
+            next_committed = self._committed - reserved + measured_d
         else:
-            next_committed = self.committed_cost + measured
-        if next_committed < 0.0:
-            next_committed = 0.0
-        self.committed_cost = next_committed
-        if reserved > 0.0 and measured > reserved:
+            next_committed = self._committed + measured_d
+        if next_committed < 0:
+            next_committed = Decimal("0")
+        self._committed = next_committed
+        self.committed_cost = float(self._committed)
+        if reserved > 0 and measured_d > reserved:
             self.cost_bound_violated = True
 
     def mark_started(self) -> None:

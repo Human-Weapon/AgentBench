@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from .errors import TargetExecutionError, ValidationError
+from .jsonutil import to_jsonable
 from .models import BenchmarkCase, RunStatus, TargetResult, Telemetry, Variant
 from .numbers import optional_number, reject_nonfinite_tree, require_int, require_number
 from .process import DEFAULT_MAX_OUTPUT_BYTES, run_bounded
@@ -157,25 +158,28 @@ class CommandTarget:
         stdin_text = None
         if self.stdin_payload:
             stdin_text = json.dumps(
-                {
-                    "case": {
-                        "id": case.id,
-                        "name": case.name,
-                        "payload": case.payload,
-                        "expected": case.expected,
+                to_jsonable(
+                    {
+                        "case": {
+                            "id": case.id,
+                            "name": case.name,
+                            "payload": case.payload,
+                            "expected": case.expected,
+                        },
+                        "variant": {
+                            "id": variant.id,
+                            "name": variant.name,
+                            "config": variant.config,
+                        },
+                        "context": {
+                            "run_id": context.get("run_id"),
+                            "seed": context.get("seed"),
+                            "repetition": context.get("repetition"),
+                        },
                     },
-                    "variant": {
-                        "id": variant.id,
-                        "name": variant.name,
-                        "config": dict(variant.config),
-                    },
-                    "context": {
-                        "run_id": context.get("run_id"),
-                        "seed": context.get("seed"),
-                        "repetition": context.get("repetition"),
-                    },
-                },
-                default=str,
+                    name="command_payload",
+                ),
+                allow_nan=False,
             )
 
         started = time.perf_counter()
@@ -301,15 +305,12 @@ class PythonCallableTarget:
                 )
             return raw
         if raw is None:
-            return TargetResult(
-                status=RunStatus.SUCCESS,
-                duration_seconds=duration,
-                exit_code=0,
-                telemetry=Telemetry(latency_seconds=duration),
+            raise TargetExecutionError(
+                "PythonCallableTarget must return TargetResult or a mapping; got None"
             )
         if not isinstance(raw, Mapping):
             raise TargetExecutionError(
-                f"PythonCallableTarget must return TargetResult, mapping, or None; "
+                f"PythonCallableTarget must return TargetResult or a mapping; "
                 f"got {type(raw).__name__}"
             )
         try:
@@ -319,7 +320,7 @@ class PythonCallableTarget:
         if telemetry.latency_seconds is None:
             telemetry = telemetry.merge(latency_seconds=duration)
         try:
-            stdout = json.dumps(raw, default=str, allow_nan=False)
+            stdout = json.dumps(to_jsonable(raw, name="callable_result"), allow_nan=False)
         except ValueError as exc:
             raise TargetExecutionError(
                 f"structured output is not JSON-serializable: {exc}"
