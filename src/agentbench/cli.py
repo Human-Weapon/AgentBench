@@ -11,7 +11,7 @@ from pathlib import Path
 from ._version import __version__
 from .comparison import compare
 from .config import _load_raw, load_evaluators, load_policy, load_pricing, load_suite, load_target
-from .errors import AgentBenchError, ConfigurationError
+from .errors import AgentBenchError, ConfigurationError, CostBoundViolationError
 from .persistence import ResultStore, load_json_object
 from .report import generate_report
 from .runner import ExperimentRunner, ExperimentSpec
@@ -150,6 +150,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         _emit(f"ran {payload['runs']} runs -> {payload['output']}")
         if outcome.stopped_reason:
             _emit(f"stopped: {outcome.stopped_reason}")
+    # Precedence: cost-bound breach (6) beats regression hard-gate (5).
+    if outcome.budget_guarantee_breached or outcome.cost_bound_violated:
+        return CostBoundViolationError.exit_code
     if outcome.comparison and outcome.comparison.get("hard_gate_passed") is False:
         return 5
     return 0

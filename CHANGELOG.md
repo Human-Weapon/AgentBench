@@ -16,6 +16,9 @@ audit of `8cf79f3` returned D. This tree is Remediation Round 1.
   UNKNOWN cost is never treated as free. If measured cost exceeds that
   reservation, AgentBench records the real spend, flags
   `cost_bound_violated`, and stops further runs (no silent clamp).
+  The CLI then exits `6` (`CostBoundViolationError.exit_code`) after
+  persisting evidence. A hard-gate failure remains exit `5`; if both
+  apply, `6` wins.
 - Case-level workspace templates use the same post-run immutability check.
 - Timeouts terminate the process tree, not only the parent.
 - Reusing a non-empty result directory is rejected.

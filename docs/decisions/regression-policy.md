@@ -23,3 +23,5 @@ Classifications:
 - `UNAVAILABLE` — metric missing on baseline or candidate
 
 Hard-gate regressions make the CLI exit `5`. Informational rules never do.
+
+A cost-bound guarantee breach (`budget_guarantee_breached`) makes `agentbench run` exit `6`, even if a hard gate also failed. The completed run and `experiment.json` remain on disk.

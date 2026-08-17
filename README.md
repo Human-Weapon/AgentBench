@@ -97,7 +97,19 @@ print(generate_report(result, comparison=comparison))
 
 `--json` selects machine-readable stdout. Ordinary config errors print `error: …` on stderr, use a stable non-zero exit code, and do **not** dump a traceback. `--debug` enables tracebacks.
 
-Exit codes: `0` ok, `1` domain/config error, `2` argparse, `3` budget (API), `4` corrupt result, `5` hard regression gate failed.
+CLI exit codes:
+
+| Code | Meaning |
+|---|---|
+| 0 | command completed; cost-bound guarantee held; no failed hard regression gate |
+| 1 | domain / config error |
+| 2 | argparse usage error |
+| 3 | budget would be exceeded before a run starts (API / pre-run) |
+| 4 | corrupt persisted result |
+| 5 | regression hard gate failed |
+| 6 | caller-supplied `per_run_max_cost` was exceeded (`CostBoundViolationError`) |
+
+If both a cost-bound breach and a hard-gate failure apply, the CLI returns **6**. The Python API still returns a structured `ExperimentOutcome` and does not raise after persisting the run.
 
 ## Suite format
 
