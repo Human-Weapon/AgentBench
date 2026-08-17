@@ -51,9 +51,15 @@ def _parser() -> argparse.ArgumentParser:
 
     def _common(subparser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         subparser.add_argument(
-            "--json", action="store_true", dest="as_json", help="machine-readable output"
+            "--json",
+            action="store_true",
+            dest="as_json",
+            default=argparse.SUPPRESS,
+            help="machine-readable output",
         )
-        subparser.add_argument("--debug", action="store_true", help="print tracebacks")
+        subparser.add_argument(
+            "--debug", action="store_true", default=argparse.SUPPRESS, help="print tracebacks"
+        )
         return subparser
 
     p_val = _common(sub.add_parser("validate", help="Validate a suite configuration."))

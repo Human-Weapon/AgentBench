@@ -8,7 +8,7 @@ explicit flag allows a given class of values. Missing measurements stay
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .errors import ValidationError
@@ -127,3 +127,40 @@ def percentile(values: Sequence[float], p: float) -> float:
         return ordered[int(rank)]
     weight = rank - lo
     return ordered[lo] + (ordered[hi] - ordered[lo]) * weight
+
+
+def reject_nonfinite_tree(value: Any, *, name: str = "value") -> Any:
+    """Walk nested mappings/sequences and reject NaN / ±Infinity."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        raise ValidationError(f"{name} must be finite; got {value!r}")
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            reject_nonfinite_tree(item, name=f"{name}.{key}")
+        return value
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            reject_nonfinite_tree(item, name=f"{name}[{index}]")
+        return value
+    return value
+
+
+def deep_freeze(value: Any) -> Any:
+    """Defensive immutable copy of nested mappings/sequences."""
+    from types import MappingProxyType
+
+    if isinstance(value, Mapping):
+        return MappingProxyType({k: deep_freeze(v) for k, v in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(deep_freeze(v) for v in value)
+    if isinstance(value, set):
+        return frozenset(deep_freeze(v) for v in value)
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        raise ValidationError("NaN/Infinity rejected in nested data")
+    return value
+
+
+def reject_json_constant(token: str) -> None:
+    """``json.loads(..., parse_constant=...)`` hook."""
+    raise ValidationError(f"non-finite JSON value rejected: {token}")

@@ -8,15 +8,15 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
-from .errors import ValidationError
+from .errors import TargetExecutionError, ValidationError
 from .models import BenchmarkCase, RunStatus, TargetResult, Telemetry, Variant
-from .numbers import optional_number, require_number
+from .numbers import optional_number, reject_nonfinite_tree, require_int, require_number
+from .process import DEFAULT_MAX_OUTPUT_BYTES, run_bounded
 
 
 @runtime_checkable
@@ -61,14 +61,15 @@ def _telemetry_from_structured(payload: Any) -> Telemetry:
     if not isinstance(payload, Mapping):
         return Telemetry()
     tel = payload.get("telemetry")
+    if tel is None:
+        keys = Telemetry.__dataclass_fields__
+        tel = payload if any(k in payload for k in keys if k != "extra") else {}
     if not isinstance(tel, Mapping):
-        tel = payload
+        raise ValidationError("telemetry must be an object")
+    reject_nonfinite_tree(tel, name="telemetry")
     fields = {k: tel.get(k) for k in Telemetry.__dataclass_fields__ if k != "extra"}
     extra = tel.get("extra") if isinstance(tel.get("extra"), Mapping) else {}
-    try:
-        return Telemetry(extra=extra, **fields)
-    except Exception:
-        return Telemetry()
+    return Telemetry(extra=extra, **fields)
 
 
 class CommandTarget:
@@ -82,6 +83,8 @@ class CommandTarget:
         env: Mapping[str, str] | None = None,
         timeout_seconds: float | None = None,
         stdin_payload: bool = True,
+        max_stdout_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
+        max_stderr_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
     ) -> None:
         if isinstance(argv, (str, bytes)):
             raise ValidationError("CommandTarget argv must be a list, not a shell string")
@@ -109,6 +112,12 @@ class CommandTarget:
             else require_number(timeout_seconds, name="timeout_seconds", allow_zero=True)
         )
         self.stdin_payload = bool(stdin_payload)
+        self.max_stdout_bytes = require_int(
+            max_stdout_bytes, name="max_stdout_bytes", allow_zero=True, minimum=0
+        )
+        self.max_stderr_bytes = require_int(
+            max_stderr_bytes, name="max_stderr_bytes", allow_zero=True, minimum=0
+        )
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -171,27 +180,14 @@ class CommandTarget:
 
         started = time.perf_counter()
         try:
-            completed = subprocess.run(  # noqa: S603 - argv list, shell=False
+            code, out_b, err_b, timed_out, out_trunc, err_trunc, duration = run_bounded(
                 list(self.argv),
                 cwd=cwd,
                 env=env,
-                input=stdin_text,
-                capture_output=True,
-                text=True,
                 timeout=timeout,
-                shell=False,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            duration = time.perf_counter() - started
-            return TargetResult(
-                status=RunStatus.TIMEOUT,
-                stdout=_decode(exc.stdout),
-                stderr=_decode(exc.stderr),
-                exit_code=None,
-                duration_seconds=duration,
-                error_message=f"timeout after {timeout}s",
-                timed_out=True,
+                stdin_text=stdin_text,
+                max_stdout_bytes=self.max_stdout_bytes,
+                max_stderr_bytes=self.max_stderr_bytes,
             )
         except OSError as exc:
             duration = time.perf_counter() - started
@@ -205,22 +201,51 @@ class CommandTarget:
                 infrastructure_error=True,
             )
 
-        duration = time.perf_counter() - started
-        stdout = completed.stdout or ""
-        stderr = completed.stderr or ""
-        structured = _parse_structured(stdout)
-        telemetry = _telemetry_from_structured(structured)
+        stdout = _decode(out_b)
+        stderr = _decode(err_b)
+        artifacts = {
+            "stdout_truncated": out_trunc,
+            "stderr_truncated": err_trunc,
+            "max_stdout_bytes": self.max_stdout_bytes,
+            "max_stderr_bytes": self.max_stderr_bytes,
+        }
+        if timed_out:
+            return TargetResult(
+                status=RunStatus.TIMEOUT,
+                stdout=stdout,
+                stderr=stderr,
+                exit_code=None,
+                duration_seconds=duration,
+                error_message=f"timeout after {timeout}s",
+                timed_out=True,
+                artifacts=artifacts,
+            )
+        try:
+            structured = _parse_structured(stdout)
+            telemetry = _telemetry_from_structured(structured)
+        except ValidationError as exc:
+            return TargetResult(
+                status=RunStatus.ERROR,
+                stdout=stdout,
+                stderr=stderr,
+                exit_code=code,
+                duration_seconds=duration,
+                error_message=f"invalid telemetry: {exc}",
+                infrastructure_error=True,
+                artifacts=artifacts,
+            )
         if telemetry.latency_seconds is None:
             telemetry = telemetry.merge(latency_seconds=duration)
-        status = RunStatus.SUCCESS if completed.returncode == 0 else RunStatus.FAILURE
+        status = RunStatus.SUCCESS if code == 0 else RunStatus.FAILURE
         return TargetResult(
             status=status,
             stdout=stdout,
             stderr=stderr,
-            exit_code=completed.returncode,
+            exit_code=code,
             duration_seconds=duration,
             structured_output=structured,
             telemetry=telemetry,
+            artifacts=artifacts,
         )
 
 
@@ -275,19 +300,35 @@ class PythonCallableTarget:
                     infrastructure_error=raw.infrastructure_error,
                 )
             return raw
-        structured = raw
-        telemetry = (
-            _telemetry_from_structured(structured)
-            if isinstance(structured, Mapping)
-            else Telemetry()
-        )
+        if raw is None:
+            return TargetResult(
+                status=RunStatus.SUCCESS,
+                duration_seconds=duration,
+                exit_code=0,
+                telemetry=Telemetry(latency_seconds=duration),
+            )
+        if not isinstance(raw, Mapping):
+            raise TargetExecutionError(
+                f"PythonCallableTarget must return TargetResult, mapping, or None; "
+                f"got {type(raw).__name__}"
+            )
+        try:
+            telemetry = _telemetry_from_structured(raw)
+        except ValidationError as exc:
+            raise TargetExecutionError(f"invalid telemetry: {exc}") from exc
         if telemetry.latency_seconds is None:
             telemetry = telemetry.merge(latency_seconds=duration)
+        try:
+            stdout = json.dumps(raw, default=str, allow_nan=False)
+        except ValueError as exc:
+            raise TargetExecutionError(
+                f"structured output is not JSON-serializable: {exc}"
+            ) from exc
         return TargetResult(
             status=RunStatus.SUCCESS,
-            stdout="" if structured is None else json.dumps(structured, default=str),
+            stdout=stdout,
             duration_seconds=duration,
-            structured_output=structured,
+            structured_output=raw,
             telemetry=telemetry,
             exit_code=0,
         )

@@ -10,7 +10,9 @@ A `RegressionPolicy` is a list of `MetricRule`s. Each rule names:
 - minimum sample size
 - hard gate vs informational
 
-Contradictory rules (same metric, opposite directions) are rejected at construction.
+Contradictory or duplicate rules for the same metric are rejected at construction. There is no silent last-rule-wins merge.
+
+Directions must be parsed through `MetricDirection.parse`. Raw strings that are not exact enum members are rejected.
 
 Classifications:
 

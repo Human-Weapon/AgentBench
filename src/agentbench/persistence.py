@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .errors import CorruptResultError, PersistenceError, ValidationError
+from .errors import ConfigurationError, CorruptResultError, PersistenceError, ValidationError
 from .models import (
     SCHEMA_VERSION,
     EvaluationResult,
@@ -25,6 +25,7 @@ from .models import (
     Telemetry,
     WorkspaceDiff,
 )
+from .numbers import reject_json_constant, reject_nonfinite_tree
 from .paths import assert_existing_ancestors_contained, safe_id, validate_contained
 
 
@@ -44,7 +45,7 @@ def atomic_write_json(path: Path, payload: Mapping[str, Any], trusted_root: Path
     try:
         validate_contained(tmp_path, trusted)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True, default=str)
+            json.dump(payload, handle, indent=2, sort_keys=True, default=str, allow_nan=False)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_path, path)
@@ -74,8 +75,14 @@ def load_json_object(path: Path) -> dict[str, Any]:
     except OSError as exc:
         raise PersistenceError(f"cannot read {path}: {exc}") from exc
     try:
-        data = json.loads(raw)
+        data = json.loads(raw, parse_constant=reject_json_constant)
     except json.JSONDecodeError as exc:
+        quarantined = _quarantine(path)
+        raise CorruptResultError(
+            f"invalid JSON in {path}: {exc}",
+            quarantined_path=quarantined,
+        ) from exc
+    except ValidationError as exc:
         quarantined = _quarantine(path)
         raise CorruptResultError(
             f"invalid JSON in {path}: {exc}",
@@ -87,7 +94,35 @@ def load_json_object(path: Path) -> dict[str, Any]:
             f"result root must be an object, got {type(data).__name__}",
             quarantined_path=quarantined,
         )
+    try:
+        reject_nonfinite_tree(data, name="result")
+    except Exception as exc:
+        quarantined = _quarantine(path)
+        raise CorruptResultError(
+            f"non-finite number in {path}: {exc}",
+            quarantined_path=quarantined,
+        ) from exc
     return data
+
+
+_OUTPUT_MARKERS = ("experiment.json", "summary.json", "comparison.json", "report.md")
+
+
+def assert_unused_output(output_root: str | Path) -> None:
+    """Refuse to start an experiment in a directory that already has results."""
+    root = Path(output_root)
+    if not root.exists():
+        return
+    for name in _OUTPUT_MARKERS:
+        if (root / name).exists():
+            raise ConfigurationError(
+                f"output directory already contains {name}; refusing to mix experiments"
+            )
+    runs = root / "runs"
+    if runs.is_dir() and any(runs.glob("*.json")):
+        raise ConfigurationError(
+            "output directory already contains run results; refusing to mix experiments"
+        )
 
 
 class ResultStore:
@@ -181,7 +216,7 @@ def run_result_from_dict(data: Mapping[str, Any]) -> RunResult:
             stdout=target_raw.get("stdout") or "",
             stderr=target_raw.get("stderr") or "",
             exit_code=target_raw.get("exit_code"),
-            duration_seconds=target_raw.get("duration_seconds") or 0.0,
+            duration_seconds=target_raw.get("duration_seconds", 0.0),
             structured_output=target_raw.get("structured_output"),
             telemetry=telemetry,
             artifacts=target_raw.get("artifacts") or {},

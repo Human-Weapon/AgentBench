@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import stat
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
@@ -29,6 +30,34 @@ DEFAULT_IGNORE = (
     "*.pyc",
     "*.pyo",
 )
+
+
+def _is_reparse(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    if os.name == "nt":
+        try:
+            attrs = os.lstat(path).st_file_attributes  # type: ignore[attr-defined]
+            return bool(attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+        except (AttributeError, OSError):
+            return False
+    return False
+
+
+def _assert_no_escaping_links(root: Path) -> None:
+    root_canon = Path(os.path.realpath(root))
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for name in list(dirnames) + list(filenames):
+            current = Path(dirpath) / name
+            if not _is_reparse(current):
+                continue
+            resolved = Path(os.path.realpath(current))
+            try:
+                resolved.relative_to(root_canon)
+            except ValueError as exc:
+                raise ValidationError(
+                    f"workspace template contains a link escaping the source tree: {current}"
+                ) from exc
 
 
 class WorkspaceProvider(Protocol):
@@ -129,6 +158,7 @@ class DirectoryCopyWorkspace:
         self.template = Path(template)
         if not self.template.is_dir():
             raise ValidationError(f"workspace template is not a directory: {self.template}")
+        _assert_no_escaping_links(self.template)
         self.ignore = tuple(ignore)
         self._source_hash = source_fingerprint(self.template, self.ignore)
 
@@ -156,7 +186,7 @@ class DirectoryCopyWorkspace:
                     skipped.add(name)
             return skipped
 
-        shutil.copytree(self.template, dest, ignore=_ignore)
+        shutil.copytree(self.template, dest, ignore=_ignore, symlinks=True)
         self.assert_source_unchanged()
         return dest
 

@@ -11,7 +11,12 @@ from typing import Any
 
 from .aggregation import aggregate_experiment
 from .comparison import compare
-from .errors import BudgetExceededError, SourceMutationError, TargetExecutionError, ValidationError
+from .errors import (
+    BudgetExceededError,
+    SourceMutationError,
+    TargetExecutionError,
+    ValidationError,
+)
 from .evaluators import Evaluator, ValidationCommandEvaluator
 from .fingerprint import collect_fingerprint
 from .models import (
@@ -27,7 +32,7 @@ from .models import (
     Variant,
     make_run_id,
 )
-from .persistence import ResultStore
+from .persistence import ResultStore, assert_unused_output
 from .regression import RegressionPolicy
 from .targets import BenchmarkTarget
 from .workspace import DirectoryCopyWorkspace, diff_snapshots, snapshot_tree, write_case_files
@@ -46,8 +51,11 @@ class BudgetLedger:
     committed_cost: float = 0.0
     cost_known: bool = True
     experiment_started_at: float = 0.0
+    _open_reservation: float = 0.0
 
-    def check_can_start(self, *, elapsed_seconds: float) -> None:
+    def check_can_start(
+        self, *, elapsed_seconds: float, remaining_timeout: float | None = None
+    ) -> None:
         budget = self.budget
         if budget.max_runs is not None and self.started >= budget.max_runs:
             raise BudgetExceededError(
@@ -58,16 +66,47 @@ class BudgetLedger:
                 raise BudgetExceededError(
                     f"max_total_duration_seconds={budget.max_total_duration_seconds} exhausted"
                 )
-        if budget.max_total_cost is not None:
-            if self.committed_cost >= budget.max_total_cost:
+            if remaining_timeout is not None and remaining_timeout <= 0:
                 raise BudgetExceededError(
-                    f"max_total_cost={budget.max_total_cost} exhausted "
-                    f"(committed={self.committed_cost})"
+                    f"max_total_duration_seconds={budget.max_total_duration_seconds} exhausted"
                 )
         if budget.max_failures is not None and self.failures >= budget.max_failures:
             raise BudgetExceededError(
                 f"max_failures={budget.max_failures} reached ({self.failures})"
             )
+
+    def reserve_cost(self) -> None:
+        budget = self.budget
+        if budget.max_total_cost is None:
+            self._open_reservation = 0.0
+            return
+        bound = budget.per_run_max_cost
+        if bound is None:
+            raise ValidationError("max_total_cost requires per_run_max_cost")
+        if self.committed_cost + bound > budget.max_total_cost:
+            raise BudgetExceededError(
+                f"max_total_cost={budget.max_total_cost} exhausted "
+                f"(committed={self.committed_cost}, reservation={bound})"
+            )
+        self.committed_cost += bound
+        self._open_reservation = bound
+
+    def reconcile_cost(self, measured: float | None) -> None:
+        reserved = self._open_reservation
+        self._open_reservation = 0.0
+        if reserved == 0.0 and measured is None:
+            return
+        if measured is None:
+            self.cost_known = False
+            return
+        charged = measured if measured <= reserved or reserved == 0.0 else reserved
+        if reserved > 0.0:
+            next_committed = self.committed_cost - reserved + charged
+        else:
+            next_committed = self.committed_cost + charged
+        if next_committed < 0.0:
+            next_committed = 0.0
+        self.committed_cost = next_committed
 
     def mark_started(self) -> None:
         self.started += 1
@@ -76,11 +115,7 @@ class BudgetLedger:
         self.completed += 1
         if result.target.status is RunStatus.FAILURE:
             self.failures += 1
-        cost = result.target.telemetry.cost
-        if cost is None:
-            self.cost_known = False
-        else:
-            self.committed_cost += cost
+        self.reconcile_cost(result.target.telemetry.cost)
 
 
 @dataclass
@@ -107,6 +142,9 @@ class ExperimentOutcome:
     budget_exhausted: bool
     stopped_reason: str | None
     output_root: str
+    planned_runs: int = 0
+    executed_runs: int = 0
+    not_scheduled: int = 0
     schema_version: int = SCHEMA_VERSION
 
     def as_dict(self) -> dict[str, Any]:
@@ -119,6 +157,9 @@ class ExperimentOutcome:
             "budget_exhausted": self.budget_exhausted,
             "stopped_reason": self.stopped_reason,
             "output_root": self.output_root,
+            "planned_runs": self.planned_runs,
+            "executed_runs": self.executed_runs,
+            "not_scheduled": self.not_scheduled,
         }
 
 
@@ -131,6 +172,7 @@ class ExperimentRunner:
             raise ValidationError("spec.suite must be a BenchmarkSuite")
         budget = spec.budget or suite.budget
         seed = suite.seed if spec.seed is None else spec.seed
+        assert_unused_output(spec.output_root)
         store = ResultStore(spec.output_root)
         template = spec.workspace_template or suite.workspace_template
         workspace_provider = None
@@ -178,23 +220,24 @@ class ExperimentRunner:
 
         for case, variant, rep in planned:
             elapsed = time.perf_counter() - ledger.experiment_started_at
+            remaining = None
+            if budget.max_total_duration_seconds is not None:
+                remaining = budget.max_total_duration_seconds - elapsed
             try:
-                ledger.check_can_start(elapsed_seconds=elapsed)
+                ledger.check_can_start(elapsed_seconds=elapsed, remaining_timeout=remaining)
+                ledger.reserve_cost()
             except BudgetExceededError as exc:
                 budget_exhausted = True
                 stopped_reason = str(exc)
-                skip = self._skipped_result(suite.id, case, variant, rep, seed, str(exc))
-                store.write_run(skip)
-                runs.append(skip)
-                # Remaining planned runs also skipped without starting.
-                idx = planned.index((case, variant, rep))
-                for later_case, later_var, later_rep in planned[idx + 1 :]:
-                    later = self._skipped_result(
-                        suite.id, later_case, later_var, later_rep, seed, str(exc)
-                    )
-                    store.write_run(later)
-                    runs.append(later)
                 break
+
+            case_timeout = (
+                case.timeout_seconds
+                if case.timeout_seconds is not None
+                else budget.per_run_timeout_seconds
+            )
+            if remaining is not None:
+                case_timeout = min(case_timeout, remaining)
 
             ledger.mark_started()
             try:
@@ -208,29 +251,21 @@ class ExperimentRunner:
                     budget=budget,
                     store=store,
                     workspace_provider=workspace_provider,
+                    timeout_seconds=case_timeout,
                 )
             except SourceMutationError:
+                ledger.reconcile_cost(None)
                 raise
             except TargetExecutionError:
+                ledger.reconcile_cost(None)
                 raise
             ledger.mark_finished(result)
             runs.append(result)
             if result.target.infrastructure_error:
                 stopped_reason = result.target.error_message or "infrastructure error"
-                # Do not continue after infrastructure corruption.
-                idx = planned.index((case, variant, rep))
-                for later_case, later_var, later_rep in planned[idx + 1 :]:
-                    later = self._skipped_result(
-                        suite.id,
-                        later_case,
-                        later_var,
-                        later_rep,
-                        seed,
-                        "aborted after infrastructure error",
-                    )
-                    store.write_run(later)
-                    runs.append(later)
                 break
+
+        not_scheduled = len(planned) - len(runs)
 
         summary = aggregate_experiment(runs)
         store.write_json("summary.json", summary)
@@ -239,11 +274,10 @@ class ExperimentRunner:
         if spec.policy is not None:
             baseline = spec.policy.baseline_variant_id
         if baseline:
-            executed = [r for r in runs if r.target.status is not RunStatus.SKIPPED]
-            if any(r.variant_id == baseline for r in executed):
+            if any(r.variant_id == baseline for r in runs):
                 metrics = [m.name for m in suite.metrics] or None
                 comparison = compare(
-                    executed,
+                    runs,
                     baseline=baseline,
                     policy=spec.policy,
                     metrics=metrics,
@@ -260,6 +294,9 @@ class ExperimentRunner:
             budget_exhausted=budget_exhausted,
             stopped_reason=stopped_reason,
             output_root=str(store.root),
+            planned_runs=len(planned),
+            executed_runs=len(runs),
+            not_scheduled=not_scheduled,
         )
         store.write_json(
             "experiment.json",
@@ -316,39 +353,28 @@ class ExperimentRunner:
         budget: ExecutionBudget,
         store: ResultStore,
         workspace_provider: DirectoryCopyWorkspace | None,
+        timeout_seconds: float,
     ) -> RunResult:
         run_id = make_run_id(suite.id, case.id, variant.id, repetition, seed)
-        timeout = (
-            case.timeout_seconds
-            if case.timeout_seconds is not None
-            else budget.per_run_timeout_seconds
-        )
+        timeout = timeout_seconds
         started_at = _iso()
         work_dir: Path | None = None
         tmp_holder = None
+        active_provider = workspace_provider
         before = {}
         try:
-            if workspace_provider is not None:
+            if case.workspace_template:
+                active_provider = DirectoryCopyWorkspace(case.workspace_template)
+            if active_provider is not None:
                 tmp_holder = tempfile.TemporaryDirectory(prefix="agentbench-ws-")
-                work_dir = workspace_provider.create(Path(tmp_holder.name) / run_id)
+                work_dir = active_provider.create(Path(tmp_holder.name) / run_id)
                 write_case_files(
                     work_dir,
                     {"id": case.id, "payload": case.payload, "expected": case.expected},
                     {"id": variant.id, "config": dict(variant.config)},
                 )
                 before = snapshot_tree(work_dir)
-                workspace_provider.assert_source_unchanged()
-            elif case.workspace_template:
-                provider = DirectoryCopyWorkspace(case.workspace_template)
-                tmp_holder = tempfile.TemporaryDirectory(prefix="agentbench-ws-")
-                work_dir = provider.create(Path(tmp_holder.name) / run_id)
-                write_case_files(
-                    work_dir,
-                    {"id": case.id, "payload": case.payload, "expected": case.expected},
-                    {"id": variant.id, "config": dict(variant.config)},
-                )
-                before = snapshot_tree(work_dir)
-                provider.assert_source_unchanged()
+                active_provider.assert_source_unchanged()
 
             context = {
                 "run_id": run_id,
@@ -360,6 +386,10 @@ class ExperimentRunner:
                 "variant_config": dict(variant.config),
             }
             target_result = spec.target.run(case, variant, context)
+            if not isinstance(target_result, TargetResult):
+                raise TargetExecutionError(
+                    f"target returned {type(target_result).__name__}, expected TargetResult"
+                )
             if spec.pricing is not None and target_result.telemetry.cost is None:
                 estimate = spec.pricing.estimate(
                     target_result.telemetry.input_tokens,
@@ -439,8 +469,8 @@ class ExperimentRunner:
                         )
                     )
 
-            if workspace_provider is not None:
-                workspace_provider.assert_source_unchanged()
+            if active_provider is not None:
+                active_provider.assert_source_unchanged()
 
             result = RunResult(
                 run_id=run_id,

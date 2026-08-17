@@ -20,13 +20,7 @@ class MetricRule:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metric", require_nonblank_str(self.metric, name="metric"))
-        if isinstance(self.direction, str):
-            try:
-                object.__setattr__(self, "direction", MetricDirection(self.direction))
-            except ValueError as exc:
-                raise ValidationError(f"unknown direction: {self.direction!r}") from exc
-        if not isinstance(self.direction, MetricDirection):
-            raise ValidationError("direction must be a MetricDirection")
+        object.__setattr__(self, "direction", MetricDirection.parse(self.direction))
         object.__setattr__(
             self,
             "absolute_threshold",
@@ -62,14 +56,14 @@ class RegressionPolicy:
         rules = tuple(self.rules)
         if not rules:
             raise ValidationError("RegressionPolicy requires at least one rule")
-        seen: dict[str, MetricDirection] = {}
+        seen: set[str] = set()
         for rule in rules:
-            prior = seen.get(rule.metric)
-            if prior is not None and prior is not rule.direction:
+            if rule.metric in seen:
                 raise ValidationError(
-                    f"contradictory rules for metric {rule.metric}: {prior} vs {rule.direction}"
+                    f"duplicate regression rule for metric {rule.metric}; "
+                    "conflicting rules are rejected"
                 )
-            seen[rule.metric] = rule.direction
+            seen.add(rule.metric)
         object.__setattr__(self, "rules", rules)
 
     @classmethod

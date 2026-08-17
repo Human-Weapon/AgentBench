@@ -65,7 +65,7 @@ def test_timeout_nan_rejected() -> None:
 
 
 def test_budget_zero_is_valid() -> None:
-    budget = ExecutionBudget(max_runs=0, max_total_cost=0.0, max_failures=0)
+    budget = ExecutionBudget(max_runs=0, max_total_cost=0.0, max_failures=0, per_run_max_cost=0.0)
     assert budget.max_runs == 0
     assert budget.max_total_cost == 0.0
 

@@ -158,7 +158,9 @@ Filesystem diffs record created / modified / deleted files (with optional byte c
 
 There is no shell mode in v0.1.0. A string argv is rejected.
 
-On timeout the process is terminated, status is `TIMEOUT` (not a generic `FAILURE`), and any captured output is preserved.
+On timeout AgentBench terminates the **process tree** (parent and descendants), status is `TIMEOUT` (not a generic `FAILURE`), and captured output is preserved up to the configured byte caps (`max_stdout_bytes` / `max_stderr_bytes`, default 1 MiB). Truncation is recorded in `artifacts`.
+
+`--json` may appear before or after the subcommand. Both forms emit JSON only on stdout.
 
 A target `FAILURE` is benchmark **data**. An infrastructure `ERROR` is distinguishable and may abort the rest of the experiment.
 
@@ -168,12 +170,19 @@ Hard limits, checked before a run starts:
 
 | Limit | Semantics |
 |---|---|
-| `max_runs=N` | N runs allowed; N+1 rejected |
+| `max_runs=N` | N physical runs allowed; N+1 is not scheduled |
 | `max_runs=0` | nothing runs |
 | `per_run_timeout_seconds` | per-run subprocess bound |
-| `max_total_duration_seconds` | wall-clock experiment cap |
-| `max_total_cost` | committed measured cost only; never reset |
+| `max_total_duration_seconds` | monotonic wall-clock cap; the active run timeout is `min(per_run, remaining)` |
+| `max_total_cost` | hard only with `per_run_max_cost` reservation **before** the target runs |
+| `per_run_max_cost` | pre-run upper bound reserved against `max_total_cost` |
 | `max_failures` | stop scheduling after N target failures |
+
+UNKNOWN cost is never treated as 0. If `max_total_cost` is set without `per_run_max_cost`, configuration is rejected: a hard cost cap cannot be enforced after the fact. A reserved run whose measured cost is unknown keeps the reservation committed. Measured zero remains zero.
+
+Unscheduled budget items are **not** written as `RunResult` records. `planned_runs` / `executed_runs` / `not_scheduled` live on the experiment outcome.
+
+Reusing an output directory that already contains AgentBench artifacts is rejected. Empty directories are allowed. Nothing is deleted.
 
 Negatives, `True`/`False`, `NaN`, and `±Infinity` are rejected at construction.
 

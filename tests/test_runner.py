@@ -50,7 +50,7 @@ def test_max_runs_zero_rejects_first() -> None:
 
 
 def test_cost_budget_is_not_reused() -> None:
-    ledger = BudgetLedger(ExecutionBudget(max_total_cost=1.0))
+    ledger = BudgetLedger(ExecutionBudget(max_total_cost=1.0, per_run_max_cost=0.6))
     from agentbench.models import RunResult
 
     run = RunResult(
@@ -61,13 +61,12 @@ def test_cost_budget_is_not_reused() -> None:
         seed=0,
         target=TargetResult(status=RunStatus.SUCCESS, telemetry=Telemetry(cost=0.6)),
     )
-    ledger.mark_started()
-    ledger.mark_finished(run)
+    ledger.reserve_cost()
     ledger.mark_started()
     ledger.mark_finished(run)
     with pytest.raises(BudgetExceededError, match="max_total_cost"):
-        ledger.check_can_start(elapsed_seconds=0)
-    assert ledger.committed_cost == pytest.approx(1.2)
+        ledger.reserve_cost()
+    assert ledger.committed_cost == pytest.approx(0.6)
 
 
 def test_runner_hard_max_runs(tmp_path: Path) -> None:
@@ -86,13 +85,15 @@ def test_runner_hard_max_runs(tmp_path: Path) -> None:
             output_root=tmp_path / "out",
         )
     )
-    executed = [r for r in outcome.runs if r.target.status is not RunStatus.SKIPPED]
-    skipped = [r for r in outcome.runs if r.target.status is RunStatus.SKIPPED]
+    executed = outcome.runs
     assert len(executed) == 1
-    assert len(skipped) == 1
+    assert outcome.not_scheduled == 1
+    assert outcome.planned_runs == 2
+    assert outcome.executed_runs == 1
+    assert all(r.target.status is not RunStatus.SKIPPED for r in executed)
     assert outcome.budget_exhausted is True
     assert (tmp_path / "out" / "runs").is_dir()
-    assert len(list((tmp_path / "out" / "runs").glob("*.json"))) == 2
+    assert len(list((tmp_path / "out" / "runs").glob("*.json"))) == 1
 
 
 def test_target_failure_does_not_abort_experiment(tmp_path: Path) -> None:

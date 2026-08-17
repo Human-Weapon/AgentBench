@@ -152,7 +152,7 @@ def test_flakiness_not_hidden() -> None:
 
 
 def test_contradictory_rules_rejected() -> None:
-    with pytest.raises(ValidationError, match="contradictory"):
+    with pytest.raises(ValidationError, match="duplicate"):
         RegressionPolicy(
             baseline_variant_id="b",
             rules=(

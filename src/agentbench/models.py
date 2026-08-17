@@ -9,6 +9,7 @@ from typing import Any
 
 from .errors import ValidationError
 from .numbers import (
+    deep_freeze,
     optional_int,
     optional_number,
     require_int,
@@ -39,6 +40,17 @@ class MetricDirection(str, Enum):
     HIGHER_IS_BETTER = "HIGHER_IS_BETTER"
     LOWER_IS_BETTER = "LOWER_IS_BETTER"
 
+    @classmethod
+    def parse(cls, value: object) -> MetricDirection:
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, str):
+            try:
+                return cls(value)
+            except ValueError as exc:
+                raise ValidationError(f"unknown metric direction: {value!r}") from exc
+        raise ValidationError(f"direction must be a MetricDirection; got {type(value).__name__}")
+
 
 class RegressionClass(str, Enum):
     IMPROVED = "IMPROVED"
@@ -54,12 +66,12 @@ class MissingMetricBehavior(str, Enum):
     UNKNOWN = "unknown"
 
 
-def _freeze_map(value: Mapping[str, Any] | None) -> dict[str, Any]:
+def _freeze_map(value: Mapping[str, Any] | None) -> Any:
     if value is None:
-        return {}
+        return deep_freeze({})
     if not isinstance(value, Mapping):
         raise ValidationError(f"metadata must be a mapping; got {type(value).__name__}")
-    return dict(value)
+    return deep_freeze(dict(value))
 
 
 def _freeze_tags(tags: Sequence[str] | None) -> tuple[str, ...]:
@@ -102,6 +114,7 @@ class ExecutionBudget:
     max_total_duration_seconds: float | None = None
     max_total_cost: float | None = None
     max_failures: int | None = None
+    per_run_max_cost: float | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -144,6 +157,18 @@ class ExecutionBudget:
             "max_failures",
             optional_int(self.max_failures, name="max_failures", allow_zero=True, minimum=0),
         )
+        object.__setattr__(
+            self,
+            "per_run_max_cost",
+            optional_number(
+                self.per_run_max_cost, name="per_run_max_cost", allow_zero=True, minimum=0.0
+            ),
+        )
+        if self.max_total_cost is not None and self.per_run_max_cost is None:
+            raise ValidationError(
+                "max_total_cost requires per_run_max_cost (pre-run reservation); "
+                "UNKNOWN cost cannot be treated as free"
+            )
 
 
 @dataclass(frozen=True)
@@ -194,6 +219,8 @@ class BenchmarkCase:
             raise ValidationError("case.description must be a string")
         object.__setattr__(self, "tags", _freeze_tags(self.tags))
         object.__setattr__(self, "metadata", _freeze_map(self.metadata))
+        object.__setattr__(self, "payload", deep_freeze(self.payload))
+        object.__setattr__(self, "expected", deep_freeze(self.expected))
         object.__setattr__(
             self,
             "timeout_seconds",
@@ -238,13 +265,7 @@ class MetricDefinition:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", require_nonblank_str(self.name, name="metric.name"))
-        if isinstance(self.direction, str):
-            try:
-                object.__setattr__(self, "direction", MetricDirection(self.direction))
-            except ValueError as exc:
-                raise ValidationError(f"unknown metric direction: {self.direction!r}") from exc
-        if not isinstance(self.direction, MetricDirection):
-            raise ValidationError("direction must be a MetricDirection")
+        object.__setattr__(self, "direction", MetricDirection.parse(self.direction))
         object.__setattr__(
             self, "minimum", optional_number(self.minimum, name="minimum", allow_negative=True)
         )

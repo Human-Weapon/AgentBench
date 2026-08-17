@@ -9,7 +9,9 @@ Contract:
 - explicit cwd / env
 - no implicit secret loading
 - bounded timeout
-- stdout/stderr/exit/duration captured
+- process-tree termination on timeout
+- stdout/stderr/exit/duration captured with explicit byte caps
+- truncation flagged when a cap is hit (the child is still drained to avoid pipe deadlock)
 
 A string argv is a configuration error, not a shell command.
 

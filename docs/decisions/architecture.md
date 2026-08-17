@@ -26,7 +26,7 @@ Modules stay small. There is no God class. `ExperimentRunner` orchestrates; it d
 | FAILURE | target ran and failed — this is benchmark data |
 | TIMEOUT | hard per-run timeout fired — benchmark data, not a crash |
 | ERROR | infrastructure failure (spawn, containment, source mutation) |
-| SKIPPED | not executed (budget or abort) |
+| SKIPPED | retained in the enum for compatibility; unscheduled budget items are **not** persisted as runs |
 
 A target can be `SUCCESS` while a validation command evaluator is `passed=False`. Those facts are stored separately.
 

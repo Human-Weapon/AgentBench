@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from .errors import ConfigurationError
+from .errors import ConfigurationError, ValidationError
 from .evaluators import Evaluator, evaluator_from_config
 from .models import (
     BenchmarkCase,
@@ -17,8 +17,68 @@ from .models import (
     PricingConfig,
     Variant,
 )
+from .numbers import reject_json_constant, reject_nonfinite_tree
 from .regression import RegressionPolicy
 from .targets import CommandTarget, default_python_argv
+
+_FILE_KEYS = {
+    "schema_version",
+    "id",
+    "name",
+    "description",
+    "seed",
+    "repetitions",
+    "baseline",
+    "baseline_variant_id",
+    "workspace_template",
+    "budget",
+    "cases",
+    "variants",
+    "metrics",
+    "target",
+    "evaluators",
+    "regression",
+    "pricing",
+    "metadata",
+}
+_CASE_KEYS = {
+    "id",
+    "name",
+    "description",
+    "payload",
+    "expected",
+    "tags",
+    "metadata",
+    "timeout_seconds",
+    "workspace_template",
+    "validation_command",
+}
+_VARIANT_KEYS = {"id", "name", "description", "config", "tags"}
+_BUDGET_KEYS = {
+    "max_runs",
+    "per_run_timeout_seconds",
+    "max_total_duration_seconds",
+    "max_total_cost",
+    "max_failures",
+    "per_run_max_cost",
+}
+
+
+def _unknown(raw: Mapping[str, Any], allowed: set[str], where: str) -> None:
+    extra = sorted(set(raw) - allowed)
+    if extra:
+        raise ConfigurationError(f"unknown {where} field(s): {extra}")
+
+
+def _resolve_path(value: str | None, base_dir: Path | None) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConfigurationError("path values must be strings")
+    path = Path(value)
+    if path.is_absolute() or base_dir is None:
+        return value
+    return str((base_dir / path).resolve())
 
 
 def _load_raw(path: str | Path) -> dict[str, Any]:
@@ -41,11 +101,17 @@ def _load_raw(path: str | Path) -> dict[str, Any]:
             raise ConfigurationError(f"invalid YAML in {file_path}: {exc}") from exc
     else:
         try:
-            data = json.loads(text)
+            data = json.loads(text, parse_constant=reject_json_constant)
         except json.JSONDecodeError as exc:
+            raise ConfigurationError(f"invalid JSON in {file_path}: {exc}") from exc
+        except ValidationError as exc:
             raise ConfigurationError(f"invalid JSON in {file_path}: {exc}") from exc
     if not isinstance(data, Mapping):
         raise ConfigurationError("config root must be an object")
+    try:
+        reject_nonfinite_tree(data, name="config")
+    except ValidationError as exc:
+        raise ConfigurationError(str(exc)) from exc
     return dict(data)
 
 
@@ -55,38 +121,52 @@ def load_suite(path: str | Path) -> BenchmarkSuite:
 
 def suite_from_dict(raw: Mapping[str, Any], *, base_dir: Path | None = None) -> BenchmarkSuite:
     try:
-        cases = tuple(
-            BenchmarkCase(
-                id=item["id"],
-                name=item.get("name") or item["id"],
-                description=item.get("description") or "",
-                payload=item.get("payload"),
-                expected=item.get("expected"),
-                tags=tuple(item.get("tags") or ()),
-                metadata=item.get("metadata") or {},
-                timeout_seconds=item.get("timeout_seconds"),
-                workspace_template=item.get("workspace_template"),
-                validation_command=item.get("validation_command"),
+        _unknown(raw, _FILE_KEYS, "suite")
+        cases = []
+        for item in raw.get("cases") or ():
+            if not isinstance(item, Mapping):
+                raise ConfigurationError("each case must be an object")
+            _unknown(item, _CASE_KEYS, "case")
+            cases.append(
+                BenchmarkCase(
+                    id=item["id"],
+                    name=item.get("name") or item["id"],
+                    description=item.get("description") or "",
+                    payload=item.get("payload"),
+                    expected=item.get("expected"),
+                    tags=tuple(item.get("tags") or ()),
+                    metadata=item.get("metadata") or {},
+                    timeout_seconds=item.get("timeout_seconds"),
+                    workspace_template=_resolve_path(item.get("workspace_template"), base_dir),
+                    validation_command=item.get("validation_command"),
+                )
             )
-            for item in raw.get("cases") or ()
-        )
-        variants = tuple(
-            Variant(
-                id=item["id"],
-                name=item.get("name") or item["id"],
-                description=item.get("description") or "",
-                config=item.get("config") or {},
-                tags=tuple(item.get("tags") or ()),
+        variants = []
+        for item in raw.get("variants") or ():
+            if not isinstance(item, Mapping):
+                raise ConfigurationError("each variant must be an object")
+            _unknown(item, _VARIANT_KEYS, "variant")
+            variants.append(
+                Variant(
+                    id=item["id"],
+                    name=item.get("name") or item["id"],
+                    description=item.get("description") or "",
+                    config=item.get("config") or {},
+                    tags=tuple(item.get("tags") or ()),
+                )
             )
-            for item in raw.get("variants") or ()
-        )
         budget_raw = raw.get("budget") or {}
+        if budget_raw:
+            if not isinstance(budget_raw, Mapping):
+                raise ConfigurationError("budget must be an object")
+            _unknown(budget_raw, _BUDGET_KEYS, "budget")
         budget = ExecutionBudget(
             max_runs=budget_raw.get("max_runs"),
             per_run_timeout_seconds=budget_raw.get("per_run_timeout_seconds", 60.0),
             max_total_duration_seconds=budget_raw.get("max_total_duration_seconds"),
             max_total_cost=budget_raw.get("max_total_cost"),
             max_failures=budget_raw.get("max_failures"),
+            per_run_max_cost=budget_raw.get("per_run_max_cost"),
         )
         metrics = tuple(
             MetricDefinition(
@@ -102,15 +182,15 @@ def suite_from_dict(raw: Mapping[str, Any], *, base_dir: Path | None = None) -> 
             id=raw["id"],
             name=raw.get("name") or raw["id"],
             description=raw.get("description") or "",
-            cases=cases,
-            variants=variants,
+            cases=tuple(cases),
+            variants=tuple(variants),
             repetitions=raw.get("repetitions", 1),
             seed=raw.get("seed", 0),
             budget=budget,
             metrics=metrics,
             baseline_variant_id=raw.get("baseline") or raw.get("baseline_variant_id"),
             metadata=raw.get("metadata") or {},
-            workspace_template=raw.get("workspace_template"),
+            workspace_template=_resolve_path(raw.get("workspace_template"), base_dir),
         )
     except ConfigurationError:
         raise
@@ -132,12 +212,14 @@ def load_target(raw: Mapping[str, Any], *, base_dir: Path | None = None) -> Any:
         argv = target.get("argv")
         if argv is None and target.get("script"):
             script = str(target["script"])
-            if base_dir is not None and not Path(script).is_absolute():
-                script = str((base_dir / script).resolve())
+            script = _resolve_path(script, base_dir) or script
             argv = default_python_argv(script)
+        cwd = target.get("cwd")
+        if isinstance(cwd, str):
+            cwd = _resolve_path(cwd, base_dir)
         return CommandTarget(
             argv,
-            cwd=target.get("cwd"),
+            cwd=cwd,
             env=target.get("env"),
             timeout_seconds=target.get("timeout_seconds"),
         )
