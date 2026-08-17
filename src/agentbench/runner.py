@@ -13,6 +13,7 @@ from .aggregation import aggregate_experiment
 from .comparison import compare
 from .errors import (
     BudgetExceededError,
+    CostBoundViolationError,
     SourceMutationError,
     TargetExecutionError,
     ValidationError,
@@ -52,6 +53,9 @@ class BudgetLedger:
     cost_known: bool = True
     experiment_started_at: float = 0.0
     _open_reservation: float = 0.0
+    cost_bound_violated: bool = False
+    reserved_cost: float = 0.0
+    unknown_reserved_cost: float = 0.0
 
     def check_can_start(
         self, *, elapsed_seconds: float, remaining_timeout: float | None = None
@@ -77,6 +81,12 @@ class BudgetLedger:
 
     def reserve_cost(self) -> None:
         budget = self.budget
+        if self.cost_bound_violated:
+            raise CostBoundViolationError(
+                "cost bound already violated; further runs are not scheduled",
+                reserved=self.reserved_cost,
+                measured=self.committed_cost,
+            )
         if budget.max_total_cost is None:
             self._open_reservation = 0.0
             return
@@ -90,6 +100,7 @@ class BudgetLedger:
             )
         self.committed_cost += bound
         self._open_reservation = bound
+        self.reserved_cost = bound
 
     def reconcile_cost(self, measured: float | None) -> None:
         reserved = self._open_reservation
@@ -98,15 +109,17 @@ class BudgetLedger:
             return
         if measured is None:
             self.cost_known = False
+            self.unknown_reserved_cost += reserved
             return
-        charged = measured if measured <= reserved or reserved == 0.0 else reserved
         if reserved > 0.0:
-            next_committed = self.committed_cost - reserved + charged
+            next_committed = self.committed_cost - reserved + measured
         else:
-            next_committed = self.committed_cost + charged
+            next_committed = self.committed_cost + measured
         if next_committed < 0.0:
             next_committed = 0.0
         self.committed_cost = next_committed
+        if reserved > 0.0 and measured > reserved:
+            self.cost_bound_violated = True
 
     def mark_started(self) -> None:
         self.started += 1
@@ -145,6 +158,10 @@ class ExperimentOutcome:
     planned_runs: int = 0
     executed_runs: int = 0
     not_scheduled: int = 0
+    committed_cost: float = 0.0
+    cost_known: bool = True
+    cost_bound_violated: bool = False
+    budget_guarantee_breached: bool = False
     schema_version: int = SCHEMA_VERSION
 
     def as_dict(self) -> dict[str, Any]:
@@ -160,6 +177,10 @@ class ExperimentOutcome:
             "planned_runs": self.planned_runs,
             "executed_runs": self.executed_runs,
             "not_scheduled": self.not_scheduled,
+            "committed_cost": self.committed_cost,
+            "cost_known": self.cost_known,
+            "cost_bound_violated": self.cost_bound_violated,
+            "budget_guarantee_breached": self.budget_guarantee_breached,
         }
 
 
@@ -261,6 +282,14 @@ class ExperimentRunner:
                 raise
             ledger.mark_finished(result)
             runs.append(result)
+            if ledger.cost_bound_violated:
+                reserved = ledger.reserved_cost
+                measured = result.target.telemetry.cost
+                stopped_reason = (
+                    f"cost bound contract violated: per_run_max_cost={reserved} "
+                    f"but measured={measured}; hard cost cap is no longer enforceable"
+                )
+                break
             if result.target.infrastructure_error:
                 stopped_reason = result.target.error_message or "infrastructure error"
                 break
@@ -297,6 +326,10 @@ class ExperimentRunner:
             planned_runs=len(planned),
             executed_runs=len(runs),
             not_scheduled=not_scheduled,
+            committed_cost=ledger.committed_cost,
+            cost_known=ledger.cost_known,
+            cost_bound_violated=ledger.cost_bound_violated,
+            budget_guarantee_breached=ledger.cost_bound_violated,
         )
         store.write_json(
             "experiment.json",
@@ -309,9 +342,13 @@ class ExperimentRunner:
                     "max_total_duration_seconds": budget.max_total_duration_seconds,
                     "max_total_cost": budget.max_total_cost,
                     "max_failures": budget.max_failures,
+                    "per_run_max_cost": budget.per_run_max_cost,
                 },
                 "committed_cost": ledger.committed_cost,
                 "cost_known": ledger.cost_known,
+                "unknown_reserved_cost": ledger.unknown_reserved_cost,
+                "cost_bound_violated": ledger.cost_bound_violated,
+                "budget_guarantee_breached": ledger.cost_bound_violated,
             },
         )
         return outcome

@@ -13,7 +13,9 @@ audit of `8cf79f3` returned D. This tree is Remediation Round 1.
 ### Remediation Round 1
 
 - Hard cost budget now requires a pre-run `per_run_max_cost` reservation.
-  UNKNOWN cost is never treated as free.
+  UNKNOWN cost is never treated as free. If measured cost exceeds that
+  reservation, AgentBench records the real spend, flags
+  `cost_bound_violated`, and stops further runs (no silent clamp).
 - Case-level workspace templates use the same post-run immutability check.
 - Timeouts terminate the process tree, not only the parent.
 - Reusing a non-empty result directory is rejected.

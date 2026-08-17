@@ -137,6 +137,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         "output": str(store.root),
         "budget_exhausted": outcome.budget_exhausted,
         "stopped_reason": outcome.stopped_reason,
+        "cost_bound_violated": outcome.cost_bound_violated,
+        "budget_guarantee_breached": outcome.budget_guarantee_breached,
+        "committed_cost": outcome.committed_cost,
         "hard_gate_passed": None
         if outcome.comparison is None
         else outcome.comparison.get("hard_gate_passed"),

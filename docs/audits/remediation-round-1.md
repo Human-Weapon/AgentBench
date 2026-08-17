@@ -17,10 +17,13 @@ Each finding below was reproduced against that SHA in a detached worktree
 - Regression: `tests/adversarial/test_remediation_round1.py` (`test_ab001_*`)
 - Fix: `ExecutionBudget.max_total_cost` requires `per_run_max_cost`. Reserve
   before `target.run`. UNKNOWN keeps the reservation. Measured 0 stays 0.
-  Reconciliation cannot go negative. Exceeding the reservation is charged at
-  the reserved bound so the cap cannot overshoot.
+  Reconciliation cannot go negative. Measured cost is never clamped to the
+  reservation. If measured exceeds the bound, `cost_bound_violated` is set
+  and further runs stop.
 - Remaining: callers must supply a truthful per-run upper bound. AgentBench
-  cannot invent one.
+  cannot invent one. If measured cost exceeds the reservation, the actual
+  spend is recorded (`cost_bound_violated`); it is **not** clamped. The hard
+  pre-execution guarantee is then breached and further runs stop.
 
 ## AB-002 — P1 — case workspace immutability
 

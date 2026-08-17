@@ -31,6 +31,27 @@ class BudgetExceededError(AgentBenchError):
     exit_code = 3
 
 
+class CostBoundViolationError(BudgetExceededError):
+    """Observed cost exceeded the caller-supplied per-run upper bound.
+
+    The spend already happened. AgentBench records the real measured cost
+    and stops scheduling further runs. This is not a silent clamp.
+    """
+
+    exit_code = 6
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reserved: float,
+        measured: float,
+    ) -> None:
+        super().__init__(message)
+        self.reserved = reserved
+        self.measured = measured
+
+
 class TargetExecutionError(AgentBenchError):
     """Infrastructure failure while invoking a target (not a target FAILURE)."""
 

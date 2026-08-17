@@ -178,7 +178,16 @@ Hard limits, checked before a run starts:
 | `per_run_max_cost` | pre-run upper bound reserved against `max_total_cost` |
 | `max_failures` | stop scheduling after N target failures |
 
-UNKNOWN cost is never treated as 0. If `max_total_cost` is set without `per_run_max_cost`, configuration is rejected: a hard cost cap cannot be enforced after the fact. A reserved run whose measured cost is unknown keeps the reservation committed. Measured zero remains zero.
+UNKNOWN cost is never treated as 0. If `max_total_cost` is set without `per_run_max_cost`, configuration is rejected: a hard pre-execution cap cannot be enforced after the fact. A reserved run whose measured cost is unknown keeps the reservation committed. Measured zero remains zero.
+
+`per_run_max_cost` is a **caller-supplied** pre-run upper bound. The hard pre-execution guarantee holds only while those bounds are truthful. If a target later reports a measured (or pricing-estimated) cost **greater** than the reservation, AgentBench:
+
+1. records the **actual** measured cost (never clamps it to the reservation);
+2. sets `cost_bound_violated` / `budget_guarantee_breached`;
+3. stops scheduling further runs;
+4. does **not** claim the hard cost cap was successfully enforced.
+
+That is a `CostBoundViolationError` contract: money already spent cannot be unspent.
 
 Unscheduled budget items are **not** written as `RunResult` records. `planned_runs` / `executed_runs` / `not_scheduled` live on the experiment outcome.
 
