@@ -5,12 +5,37 @@ All notable changes to AgentBench are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 0.1.0 release candidate
+## [Unreleased]
 
-First functional release candidate. **Not tagged.** Independent adversarial
-audit of `8cf79f3` returned D. Second independent audit of `0ad5bfeed`
-also returned D. Third independent audit of `5d64b28` also returned D.
-This tree is Remediation Round 4.
+## [0.1.0] — 2026-08-17
+
+First stable open-source release.
+
+Promoted candidate: `20bc72473a192f4603b52cbce8e30d43d58c148e`.
+Final independent promotion verification: **PASS — PROMOTE v0.1.0**.
+
+AgentBench is an objective benchmarking and regression-evaluation toolkit
+for AI agents, prompts, skills, models, and execution strategies. It
+measures; it does not choose production models or strategies.
+
+This release was promoted after four independent adversarial audit /
+remediation rounds. Earlier verdicts (D / C) are retained below as
+engineering history. They are not erased by promotion.
+
+### Shipped
+
+- Reproducible benchmark suites with cases, variants, repetitions, and seeds
+- Command targets (argv list, `shell=False`) and Python-callable targets
+- Pluggable deterministic evaluators and explicit metric directions
+- Baseline / candidate regression comparison, paired win rate, flakiness
+- Hard execution budgets: runs, duration, failures, and cost
+- Honest cost accounting (`Decimal`; UNKNOWN is never zero; measured spend
+  is never clamped)
+- Process timeout with descendant cleanup
+- Isolated workspaces and source-immutability checks
+- Structured JSON experiment persistence and human / `--json` CLI
+- Wheel and sdist standalone packaging (no sibling ecosystem required)
+- CI verified on Windows and Ubuntu, Python 3.10–3.12
 
 ### Remediation Round 4
 
@@ -85,7 +110,13 @@ This tree is Remediation Round 4.
 ### Known limitations
 
 - Sequential execution only
-- No confidence intervals
-- macOS CI not configured
-- Output containment is defensive, not a privileged-attacker sandbox
+- No confidence intervals / statistical significance
+- macOS CI is not verified
+- Output containment is defensive application-level protection, not a
+  kernel sandbox
+- Hard-link aliases of an already-trusted file cannot be distinguished
+  via `realpath`
+- Callers must supply a truthful `per_run_max_cost` for pre-run hard
+  cost guarantees
 - No LLM provider calls (by design)
+- GitHub-only release; not published to PyPI (unrelated PyPI name collision)

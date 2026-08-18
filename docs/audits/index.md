@@ -11,6 +11,10 @@
 | 3 | third Codex audit of `5d64b28` | D — NOT RELEASE READY | 6 residual P1s |
 | 3b | `59d3dfca48ae1fc28a0ae9550b56509fee189b51` | remediating | See `remediation-round-3.md` |
 | 4 | fourth Codex audit of `59d3dfc` | C — FIX BEFORE PROMOTING | AB4-001..003 |
-| 4b | this tree | remediating | See `remediation-round-4.md` |
+| 4b | `20bc72473a192f4603b52cbce8e30d43d58c148e` | remediating | See `remediation-round-4.md` |
+| 5 | `20bc72473a192f4603b52cbce8e30d43d58c148e` | PASS — PROMOTE v0.1.0 | Final independent promotion verification |
 
-No tag. No GitHub Release. No PyPI.
+Promoted candidate (application code): `20bc72473a192f4603b52cbce8e30d43d58c148e`.
+
+GitHub-only release. No PyPI publication (unrelated project already uses the
+`agentbench` name on PyPI).
