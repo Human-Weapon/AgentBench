@@ -179,19 +179,27 @@ class ResultStore:
 
     def write_text(self, name: str, text: str) -> Path:
         self._assert_identity()
-        if name != Path(name).name or ".." in name:
+        trusted = Path(self._identity)
+        if name != Path(name).name or ".." in name or "/" in name or "\\" in name:
             raise ValidationError(f"unsafe output name: {name!r}")
-        path = validate_contained(self.root / name, self.root)
-        assert_existing_ancestors_contained(path, self.root)
-        fd, tmp_name = tempfile.mkstemp(prefix=".ab-", suffix=".tmp", dir=str(self.root))
+        dest = self.root / name
+        if dest.exists() or dest.is_symlink():
+            validate_contained(dest, trusted)
+        else:
+            assert_existing_ancestors_contained(dest, trusted)
+        fd, tmp_name = tempfile.mkstemp(prefix=".ab-", suffix=".tmp", dir=str(trusted))
         tmp_path = Path(tmp_name)
         try:
-            validate_contained(tmp_path, self.root)
+            validate_contained(tmp_path, trusted)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(text)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(tmp_path, path)
+            self._assert_identity()
+            if dest.exists() or dest.is_symlink():
+                validate_contained(dest, trusted)
+            os.replace(tmp_path, dest)
+            validate_contained(dest, trusted)
         except Exception:
             try:
                 if tmp_path.exists():
@@ -199,7 +207,22 @@ class ResultStore:
             except OSError:  # pragma: no cover
                 pass
             raise
-        return path
+        return dest
+
+    def contained_filename(self, dest: str | Path | None, *, default: str) -> str:
+        """Return a single safe filename that will stay under this store."""
+        self._assert_identity()
+        if dest is None:
+            return default
+        path = Path(dest)
+        if not path.is_absolute():
+            if path.parent != Path(".") and str(path.parent) not in {"", "."}:
+                raise ValidationError("output name must be a filename under the results root")
+            return path.name
+        parent = os.path.realpath(path.parent)
+        if os.path.normcase(parent) != os.path.normcase(self._identity):
+            raise PathEscapeError("output path is outside the results root")
+        return path.name
 
     def load_run(self, run_id: str) -> RunResult:
         return run_result_from_dict(load_json_object(self.run_path(run_id)))
@@ -212,6 +235,28 @@ class ResultStore:
         for path in sorted(runs_dir.glob("*.json")):
             results.append(run_result_from_dict(load_json_object(path)))
         return results
+
+
+def _field_mapping(
+    raw: Mapping[str, Any], key: str, *, missing_ok: bool = True
+) -> Mapping[str, Any]:
+    if key not in raw or raw[key] is None:
+        if missing_ok:
+            return {}
+        raise CorruptResultError(f"{key} is required")
+    value = raw[key]
+    if not isinstance(value, Mapping):
+        raise CorruptResultError(f"{key} must be an object")
+    return value
+
+
+def _field_str(raw: Mapping[str, Any], key: str, *, default: str | None = "") -> str | None:
+    if key not in raw or raw[key] is None:
+        return default
+    value = raw[key]
+    if not isinstance(value, str):
+        raise CorruptResultError(f"{key} must be a string")
+    return value
 
 
 def run_result_from_dict(data: Mapping[str, Any]) -> RunResult:
@@ -230,21 +275,9 @@ def run_result_from_dict(data: Mapping[str, Any]) -> RunResult:
         status = RunStatus(target_raw["status"])
     except Exception as exc:
         raise CorruptResultError(f"invalid target status: {target_raw.get('status')!r}") from exc
-    tel_raw = target_raw.get("telemetry", {})
-    if tel_raw is None:
-        tel_raw = {}
-    if not isinstance(tel_raw, Mapping):
-        raise CorruptResultError("telemetry must be an object")
-    extra = tel_raw.get("extra", {})
-    if extra is None:
-        extra = {}
-    if not isinstance(extra, Mapping):
-        raise CorruptResultError("telemetry.extra must be an object")
-    artifacts = target_raw.get("artifacts", {})
-    if artifacts is None:
-        artifacts = {}
-    if not isinstance(artifacts, Mapping):
-        raise CorruptResultError("artifacts must be an object")
+    tel_raw = _field_mapping(target_raw, "telemetry")
+    extra = _field_mapping(tel_raw, "extra")
+    artifacts = _field_mapping(target_raw, "artifacts")
     try:
         telemetry = Telemetry(
             **{k: tel_raw.get(k) for k in Telemetry.__dataclass_fields__ if k != "extra"},
@@ -252,8 +285,8 @@ def run_result_from_dict(data: Mapping[str, Any]) -> RunResult:
         )
         target = TargetResult(
             status=status,
-            stdout=target_raw.get("stdout") or "",
-            stderr=target_raw.get("stderr") or "",
+            stdout=_field_str(target_raw, "stdout") or "",
+            stderr=_field_str(target_raw, "stderr") or "",
             exit_code=target_raw.get("exit_code"),
             duration_seconds=target_raw.get("duration_seconds", 0.0),
             structured_output=target_raw.get("structured_output"),
@@ -279,7 +312,7 @@ def run_result_from_dict(data: Mapping[str, Any]) -> RunResult:
                     evaluator=item["evaluator"],
                     passed=item.get("passed"),
                     score=item.get("score"),
-                    details=item.get("details") or {},
+                    details=_field_mapping(item, "details"),
                     error=item.get("error"),
                 )
             )
@@ -289,13 +322,19 @@ def run_result_from_dict(data: Mapping[str, Any]) -> RunResult:
             if not isinstance(diff_raw, Mapping):
                 raise CorruptResultError("workspace_diff must be an object")
             diff = WorkspaceDiff(
-                files_created=diff_raw.get("files_created") or 0,
-                files_modified=diff_raw.get("files_modified") or 0,
-                files_deleted=diff_raw.get("files_deleted") or 0,
-                bytes_changed=diff_raw.get("bytes_changed") or 0,
-                created_paths=tuple(diff_raw.get("created_paths") or ()),
-                modified_paths=tuple(diff_raw.get("modified_paths") or ()),
-                deleted_paths=tuple(diff_raw.get("deleted_paths") or ()),
+                files_created=diff_raw["files_created"] if "files_created" in diff_raw else 0,
+                files_modified=diff_raw["files_modified"] if "files_modified" in diff_raw else 0,
+                files_deleted=diff_raw["files_deleted"] if "files_deleted" in diff_raw else 0,
+                bytes_changed=diff_raw["bytes_changed"] if "bytes_changed" in diff_raw else 0,
+                created_paths=tuple(diff_raw["created_paths"])
+                if "created_paths" in diff_raw and diff_raw["created_paths"] is not None
+                else (),
+                modified_paths=tuple(diff_raw["modified_paths"])
+                if "modified_paths" in diff_raw and diff_raw["modified_paths"] is not None
+                else (),
+                deleted_paths=tuple(diff_raw["deleted_paths"])
+                if "deleted_paths" in diff_raw and diff_raw["deleted_paths"] is not None
+                else (),
             )
         return RunResult(
             run_id=data["run_id"],
@@ -306,8 +345,8 @@ def run_result_from_dict(data: Mapping[str, Any]) -> RunResult:
             target=target,
             evaluations=tuple(evaluations),
             workspace_diff=diff,
-            started_at=data.get("started_at") or "",
-            finished_at=data.get("finished_at") or "",
+            started_at=_field_str(data, "started_at") or "",
+            finished_at=_field_str(data, "finished_at") or "",
             schema_version=version,
         )
     except CorruptResultError:

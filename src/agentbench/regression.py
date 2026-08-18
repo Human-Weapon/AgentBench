@@ -8,7 +8,7 @@ from typing import Any
 
 from .errors import ConfigurationError, ValidationError
 from .models import MetricDirection
-from .numbers import optional_bool, optional_number, require_int, require_nonblank_str
+from .numbers import optional_number, require_bool, require_int, require_nonblank_str
 
 _POLICY_KEYS = {"baseline", "rules"}
 _RULE_KEYS = {
@@ -101,7 +101,10 @@ class RegressionPolicy:
             _unknown(item, _RULE_KEYS, "regression rule")
             if "metric" not in item or "direction" not in item:
                 raise ConfigurationError("regression rule requires metric and direction")
-            hard = item.get("hard_gate")
+            if "hard_gate" in item:
+                hard = require_bool(item["hard_gate"], name="hard_gate")
+            else:
+                hard = False
             rules.append(
                 MetricRule(
                     metric=item["metric"],
@@ -109,7 +112,7 @@ class RegressionPolicy:
                     absolute_threshold=item.get("absolute_threshold"),
                     relative_threshold=item.get("relative_threshold"),
                     min_sample_size=item.get("min_sample_size", 1),
-                    hard_gate=False if hard is None else optional_bool(hard, name="hard_gate"),
+                    hard_gate=hard,
                 )
             )
         return cls(rules=tuple(rules), baseline_variant_id=raw["baseline"])

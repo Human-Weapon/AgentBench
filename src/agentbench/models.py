@@ -12,6 +12,7 @@ from .numbers import (
     deep_freeze,
     optional_int,
     optional_number,
+    require_bool,
     require_int,
     require_nonblank_str,
     require_number,
@@ -452,6 +453,12 @@ class TargetResult:
         if not isinstance(self.telemetry, Telemetry):
             raise ValidationError("telemetry must be a Telemetry instance")
         object.__setattr__(self, "artifacts", _freeze_map(self.artifacts))
+        object.__setattr__(self, "timed_out", require_bool(self.timed_out, name="timed_out"))
+        object.__setattr__(
+            self,
+            "infrastructure_error",
+            require_bool(self.infrastructure_error, name="infrastructure_error"),
+        )
         if self.timed_out and self.status is not RunStatus.TIMEOUT:
             raise ValidationError("timed_out=True requires status=TIMEOUT")
         if self.status is RunStatus.TIMEOUT and not self.timed_out:

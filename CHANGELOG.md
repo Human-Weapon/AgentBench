@@ -9,7 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 First functional release candidate. **Not tagged.** Independent adversarial
 audit of `8cf79f3` returned D. Second independent audit of `0ad5bfeed`
-also returned D. This tree is Remediation Round 2.
+also returned D. Third independent audit of `5d64b28` also returned D.
+This tree is Remediation Round 3.
+
+### Remediation Round 3
+
+- Explicit `hard_gate: null` is rejected (omitted still defaults to false).
+- `to_jsonable` / `deep_freeze` require string mapping keys; no key
+  stringification or silent collisions.
+- Closed, type-strict config schemas for suite/case/variant/target/
+  evaluator/metric/budget/pricing/regression. `validate` and `run` share
+  `load_validated_config`.
+- Public `TargetResult` booleans must be real bools so persist/load
+  round-trips.
+- Persisted nested evidence is not repaired (`or {}` / `or 0` removed).
+- `agentbench report` writes only through `ResultStore.write_text`.
 
 ### Remediation Round 2
 

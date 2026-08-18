@@ -54,6 +54,19 @@ _CASE_KEYS = {
     "validation_command",
 }
 _VARIANT_KEYS = {"id", "name", "description", "config", "tags"}
+_METRIC_KEYS = {"name", "direction", "minimum", "maximum", "weight"}
+_TARGET_KEYS = {"type", "argv", "script", "cwd", "env", "timeout_seconds"}
+_EVALUATOR_KEYS: dict[str, set[str]] = {
+    "exit_code": {"type", "expected"},
+    "exact_text": {"type", "expected", "source"},
+    "contains_text": {"type", "needle", "source"},
+    "regex": {"type", "pattern", "source"},
+    "json_field": {"type", "field", "expected", "source"},
+    "validation_command": {"type", "argv", "timeout_seconds"},
+    "file_change": {"type", "min_created", "min_modified", "min_deleted"},
+    "tests_passed": {"type"},
+    "target_status": {"type", "expected"},
+}
 _BUDGET_KEYS = {
     "max_runs",
     "per_run_timeout_seconds",
@@ -68,6 +81,34 @@ def _unknown(raw: Mapping[str, Any], allowed: set[str], where: str) -> None:
     extra = sorted(set(raw) - allowed)
     if extra:
         raise ConfigurationError(f"unknown {where} field(s): {extra}")
+
+
+def _require_list(raw: Mapping[str, Any], key: str, *, required: bool = False) -> list[Any]:
+    if key not in raw:
+        if required:
+            raise ConfigurationError(f"{key} is required")
+        return []
+    value = raw[key]
+    if value is None:
+        raise ConfigurationError(f"{key} must not be null")
+    if not isinstance(value, list):
+        raise ConfigurationError(f"{key} must be an array")
+    return value
+
+
+def _require_object(value: Any, *, name: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ConfigurationError(f"{name} must be an object")
+    return value
+
+
+def _optional_object_field(raw: Mapping[str, Any], key: str, *, name: str) -> Mapping[str, Any]:
+    if key not in raw:
+        return {}
+    value = raw[key]
+    if value is None:
+        raise ConfigurationError(f"{name} must not be null")
+    return _require_object(value, name=name)
 
 
 def _resolve_path(value: str | None, base_dir: Path | None) -> str | None:
@@ -123,43 +164,47 @@ def suite_from_dict(raw: Mapping[str, Any], *, base_dir: Path | None = None) -> 
     try:
         _unknown(raw, _FILE_KEYS, "suite")
         cases = []
-        for item in raw.get("cases") or ():
+        for item in _require_list(raw, "cases", required=True):
             if not isinstance(item, Mapping):
                 raise ConfigurationError("each case must be an object")
             _unknown(item, _CASE_KEYS, "case")
+            name = item["name"] if "name" in item else item["id"]
             cases.append(
                 BenchmarkCase(
                     id=item["id"],
-                    name=item.get("name") or item["id"],
-                    description=item.get("description") or "",
+                    name=name,
+                    description=item["description"] if "description" in item else "",
                     payload=item.get("payload"),
                     expected=item.get("expected"),
-                    tags=tuple(item.get("tags") or ()),
-                    metadata=item.get("metadata") or {},
+                    tags=tuple(item["tags"]) if "tags" in item else (),
+                    metadata=_optional_object_field(item, "metadata", name="case.metadata"),
                     timeout_seconds=item.get("timeout_seconds"),
                     workspace_template=_resolve_path(item.get("workspace_template"), base_dir),
                     validation_command=item.get("validation_command"),
                 )
             )
         variants = []
-        for item in raw.get("variants") or ():
+        for item in _require_list(raw, "variants", required=True):
             if not isinstance(item, Mapping):
                 raise ConfigurationError("each variant must be an object")
             _unknown(item, _VARIANT_KEYS, "variant")
             variants.append(
                 Variant(
                     id=item["id"],
-                    name=item.get("name") or item["id"],
-                    description=item.get("description") or "",
-                    config=item.get("config") or {},
-                    tags=tuple(item.get("tags") or ()),
+                    name=item["name"] if "name" in item else item["id"],
+                    description=item["description"] if "description" in item else "",
+                    config=_optional_object_field(item, "config", name="variant.config"),
+                    tags=tuple(item["tags"]) if "tags" in item else (),
                 )
             )
-        budget_raw = raw.get("budget") or {}
-        if budget_raw:
-            if not isinstance(budget_raw, Mapping):
-                raise ConfigurationError("budget must be an object")
+        if "budget" in raw:
+            budget_raw = raw["budget"]
+            if budget_raw is None:
+                raise ConfigurationError("budget must not be null")
+            budget_raw = _require_object(budget_raw, name="budget")
             _unknown(budget_raw, _BUDGET_KEYS, "budget")
+        else:
+            budget_raw = {}
         budget = ExecutionBudget(
             max_runs=budget_raw.get("max_runs"),
             per_run_timeout_seconds=budget_raw.get("per_run_timeout_seconds", 60.0),
@@ -168,28 +213,34 @@ def suite_from_dict(raw: Mapping[str, Any], *, base_dir: Path | None = None) -> 
             max_failures=budget_raw.get("max_failures"),
             per_run_max_cost=budget_raw.get("per_run_max_cost"),
         )
-        metrics = tuple(
-            MetricDefinition(
-                name=item["name"],
-                direction=item["direction"],
-                minimum=item.get("minimum"),
-                maximum=item.get("maximum"),
-                weight=item.get("weight"),
+        metrics = []
+        for item in _require_list(raw, "metrics"):
+            if not isinstance(item, Mapping):
+                raise ConfigurationError("each metric must be an object")
+            _unknown(item, _METRIC_KEYS, "metric")
+            metrics.append(
+                MetricDefinition(
+                    name=item["name"],
+                    direction=item["direction"],
+                    minimum=item.get("minimum"),
+                    maximum=item.get("maximum"),
+                    weight=item.get("weight"),
+                )
             )
-            for item in raw.get("metrics") or ()
-        )
         return BenchmarkSuite(
             id=raw["id"],
-            name=raw.get("name") or raw["id"],
-            description=raw.get("description") or "",
+            name=raw["name"] if "name" in raw else raw["id"],
+            description=raw["description"] if "description" in raw else "",
             cases=tuple(cases),
             variants=tuple(variants),
             repetitions=raw.get("repetitions", 1),
             seed=raw.get("seed", 0),
             budget=budget,
-            metrics=metrics,
-            baseline_variant_id=raw.get("baseline") or raw.get("baseline_variant_id"),
-            metadata=raw.get("metadata") or {},
+            metrics=tuple(metrics),
+            baseline_variant_id=raw.get("baseline")
+            if "baseline" in raw
+            else raw.get("baseline_variant_id"),
+            metadata=_optional_object_field(raw, "metadata", name="suite.metadata"),
             workspace_template=_resolve_path(raw.get("workspace_template"), base_dir),
         )
     except ConfigurationError:
@@ -199,14 +250,25 @@ def suite_from_dict(raw: Mapping[str, Any], *, base_dir: Path | None = None) -> 
 
 
 def load_evaluators(raw: Mapping[str, Any]) -> tuple[Evaluator, ...]:
-    items = raw.get("evaluators") or ()
-    return tuple(evaluator_from_config(item) for item in items)
+    items = _require_list(raw, "evaluators")
+    out = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            raise ConfigurationError("each evaluator must be an object")
+        kind = item.get("type")
+        allowed = _EVALUATOR_KEYS.get(kind) if isinstance(kind, str) else None
+        if allowed is None:
+            raise ConfigurationError(f"unknown evaluator type: {kind!r}")
+        _unknown(item, allowed, "evaluator")
+        out.append(evaluator_from_config(item))
+    return tuple(out)
 
 
 def load_target(raw: Mapping[str, Any], *, base_dir: Path | None = None) -> Any:
     target = raw.get("target")
     if not isinstance(target, Mapping):
         raise ConfigurationError("config.target is required")
+    _unknown(target, _TARGET_KEYS, "target")
     kind = target.get("type")
     if kind == "command":
         argv = target.get("argv")
@@ -231,16 +293,15 @@ def load_target(raw: Mapping[str, Any], *, base_dir: Path | None = None) -> Any:
 
 
 def load_policy(raw: Mapping[str, Any]) -> RegressionPolicy | None:
-    block = raw.get("regression")
-    if not block:
+    if "regression" not in raw:
         return None
-    return RegressionPolicy.from_config(block)
+    return RegressionPolicy.from_config(raw["regression"])
 
 
 def load_pricing(raw: Mapping[str, Any]) -> PricingConfig | None:
-    block = raw.get("pricing")
-    if not block:
+    if "pricing" not in raw:
         return None
+    block = raw["pricing"]
     if not isinstance(block, Mapping):
         raise ConfigurationError("pricing must be an object")
     extra = sorted(set(block) - {"input_token_rate", "output_token_rate"})

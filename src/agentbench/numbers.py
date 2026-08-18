@@ -152,7 +152,12 @@ def deep_freeze(value: Any) -> Any:
     from types import MappingProxyType
 
     if isinstance(value, Mapping):
-        return MappingProxyType({k: deep_freeze(v) for k, v in value.items()})
+        frozen: dict[Any, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValidationError(f"mapping keys must be strings; got {type(key).__name__}")
+            frozen[key] = deep_freeze(item)
+        return MappingProxyType(frozen)
     if isinstance(value, (list, tuple)):
         return tuple(deep_freeze(v) for v in value)
     if isinstance(value, set):

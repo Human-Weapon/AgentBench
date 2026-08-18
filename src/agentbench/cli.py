@@ -199,8 +199,9 @@ def _cmd_report(args: argparse.Namespace) -> int:
     if cmp_path.exists():
         comparison = load_json_object(cmp_path)
     text = generate_report(runs=runs, summary=summary or None, comparison=comparison)
-    dest = args.output or str(store.root / "report.md")
-    Path(dest).write_text(text, encoding="utf-8")
+    dest_name = store.contained_filename(args.output, default="report.md")
+    dest = store.write_text(dest_name, text)
+    dest = str(dest)
     if args.as_json:
         print(json.dumps({"report": dest, "runs": len(runs)}, indent=2))
     else:
