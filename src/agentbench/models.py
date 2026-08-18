@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
@@ -99,6 +100,38 @@ def _argv(value: Any, *, name: str) -> tuple[str, ...]:
             raise ValidationError(f"{name} entries must be non-empty strings")
         parts.append(item)
     return tuple(parts)
+
+
+def require_timestamp(value: Any, *, name: str) -> str:
+    """Empty string or ISO-8601. Explicit null / non-strings are invalid."""
+    if not isinstance(value, str):
+        raise ValidationError(f"{name} must be a string")
+    if value == "":
+        return value
+    try:
+        datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValidationError(f"{name} must be an ISO-8601 timestamp") from exc
+    return value
+
+
+def require_optional_str(value: Any, *, name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValidationError(f"{name} must be a string or None")
+    return value
+
+
+def require_str_tuple(value: Any, *, name: str) -> tuple[str, ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise ValidationError(f"{name} must be a sequence of strings")
+    out: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise ValidationError(f"{name} entries must be strings")
+        out.append(item)
+    return tuple(out)
 
 
 @dataclass(frozen=True)
@@ -414,6 +447,8 @@ class WorkspaceDiff:
                 key,
                 require_int(getattr(self, key), name=key, allow_zero=True, minimum=0),
             )
+        for key in ("created_paths", "modified_paths", "deleted_paths"):
+            object.__setattr__(self, key, require_str_tuple(getattr(self, key), name=key))
 
 
 @dataclass(frozen=True)
@@ -453,6 +488,9 @@ class TargetResult:
         if not isinstance(self.telemetry, Telemetry):
             raise ValidationError("telemetry must be a Telemetry instance")
         object.__setattr__(self, "artifacts", _freeze_map(self.artifacts))
+        object.__setattr__(
+            self, "error_message", require_optional_str(self.error_message, name="error_message")
+        )
         object.__setattr__(self, "timed_out", require_bool(self.timed_out, name="timed_out"))
         object.__setattr__(
             self,
@@ -500,6 +538,7 @@ class EvaluationResult:
             self, "score", optional_number(self.score, name="score", allow_negative=True)
         )
         object.__setattr__(self, "details", _freeze_map(self.details))
+        object.__setattr__(self, "error", require_optional_str(self.error, name="error"))
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -543,6 +582,12 @@ class RunResult:
             self,
             "schema_version",
             require_int(self.schema_version, name="schema_version", minimum=1),
+        )
+        object.__setattr__(
+            self, "started_at", require_timestamp(self.started_at, name="started_at")
+        )
+        object.__setattr__(
+            self, "finished_at", require_timestamp(self.finished_at, name="finished_at")
         )
 
     @property

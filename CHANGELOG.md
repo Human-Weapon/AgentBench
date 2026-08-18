@@ -10,7 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First functional release candidate. **Not tagged.** Independent adversarial
 audit of `8cf79f3` returned D. Second independent audit of `0ad5bfeed`
 also returned D. Third independent audit of `5d64b28` also returned D.
-This tree is Remediation Round 3.
+This tree is Remediation Round 4.
+
+### Remediation Round 4
+
+- Explicit JSON `null` is no longer treated as an omitted field for
+  optional-absent mappings, strings, lists, or timestamps.
+- `started_at` / `finished_at` are empty or ISO-8601 strings at both
+  construction and load. `None` and numbers cannot persist then fail.
+- Workspace path lists are `tuple[str, ...]`. Error fields are `str | None`.
 
 ### Remediation Round 3
 

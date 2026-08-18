@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -240,23 +240,52 @@ class ResultStore:
 def _field_mapping(
     raw: Mapping[str, Any], key: str, *, missing_ok: bool = True
 ) -> Mapping[str, Any]:
-    if key not in raw or raw[key] is None:
+    if key not in raw:
         if missing_ok:
             return {}
         raise CorruptResultError(f"{key} is required")
     value = raw[key]
+    if value is None:
+        raise CorruptResultError(f"{key} must not be null")
     if not isinstance(value, Mapping):
         raise CorruptResultError(f"{key} must be an object")
     return value
 
 
 def _field_str(raw: Mapping[str, Any], key: str, *, default: str | None = "") -> str | None:
-    if key not in raw or raw[key] is None:
+    if key not in raw:
         return default
     value = raw[key]
+    if value is None:
+        raise CorruptResultError(f"{key} must not be null")
     if not isinstance(value, str):
         raise CorruptResultError(f"{key} must be a string")
     return value
+
+
+def _nullable_str(raw: Mapping[str, Any], key: str) -> str | None:
+    if key not in raw or raw[key] is None:
+        return None
+    value = raw[key]
+    if not isinstance(value, str):
+        raise CorruptResultError(f"{key} must be a string or null")
+    return value
+
+
+def _optional_str_tuple(raw: Mapping[str, Any], key: str) -> tuple[str, ...]:
+    if key not in raw:
+        return ()
+    value = raw[key]
+    if value is None:
+        raise CorruptResultError(f"{key} must not be null")
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise CorruptResultError(f"{key} must be an array of strings")
+    out: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise CorruptResultError(f"{key} entries must be strings")
+        out.append(item)
+    return tuple(out)
 
 
 def run_result_from_dict(data: Mapping[str, Any]) -> RunResult:
@@ -285,23 +314,26 @@ def run_result_from_dict(data: Mapping[str, Any]) -> RunResult:
         )
         target = TargetResult(
             status=status,
-            stdout=_field_str(target_raw, "stdout") or "",
-            stderr=_field_str(target_raw, "stderr") or "",
+            stdout=_field_str(target_raw, "stdout", default=""),
+            stderr=_field_str(target_raw, "stderr", default=""),
             exit_code=target_raw.get("exit_code"),
             duration_seconds=target_raw.get("duration_seconds", 0.0),
             structured_output=target_raw.get("structured_output"),
             telemetry=telemetry,
             artifacts=artifacts,
-            error_message=target_raw.get("error_message"),
+            error_message=_nullable_str(target_raw, "error_message"),
             timed_out=require_bool(target_raw.get("timed_out", False), name="timed_out"),
             infrastructure_error=require_bool(
                 target_raw.get("infrastructure_error", False), name="infrastructure_error"
             ),
         )
         evaluations = []
-        evals_raw = data.get("evaluations")
-        if evals_raw is None:
-            evals_raw = []
+        if "evaluations" not in data:
+            evals_raw: list[Any] = []
+        elif data["evaluations"] is None:
+            raise CorruptResultError("evaluations must not be null")
+        else:
+            evals_raw = data["evaluations"]
         if not isinstance(evals_raw, list):
             raise CorruptResultError("evaluations must be an array")
         for item in evals_raw:
@@ -313,7 +345,7 @@ def run_result_from_dict(data: Mapping[str, Any]) -> RunResult:
                     passed=item.get("passed"),
                     score=item.get("score"),
                     details=_field_mapping(item, "details"),
-                    error=item.get("error"),
+                    error=_nullable_str(item, "error"),
                 )
             )
         diff = None
@@ -326,15 +358,9 @@ def run_result_from_dict(data: Mapping[str, Any]) -> RunResult:
                 files_modified=diff_raw["files_modified"] if "files_modified" in diff_raw else 0,
                 files_deleted=diff_raw["files_deleted"] if "files_deleted" in diff_raw else 0,
                 bytes_changed=diff_raw["bytes_changed"] if "bytes_changed" in diff_raw else 0,
-                created_paths=tuple(diff_raw["created_paths"])
-                if "created_paths" in diff_raw and diff_raw["created_paths"] is not None
-                else (),
-                modified_paths=tuple(diff_raw["modified_paths"])
-                if "modified_paths" in diff_raw and diff_raw["modified_paths"] is not None
-                else (),
-                deleted_paths=tuple(diff_raw["deleted_paths"])
-                if "deleted_paths" in diff_raw and diff_raw["deleted_paths"] is not None
-                else (),
+                created_paths=_optional_str_tuple(diff_raw, "created_paths"),
+                modified_paths=_optional_str_tuple(diff_raw, "modified_paths"),
+                deleted_paths=_optional_str_tuple(diff_raw, "deleted_paths"),
             )
         return RunResult(
             run_id=data["run_id"],
@@ -345,8 +371,8 @@ def run_result_from_dict(data: Mapping[str, Any]) -> RunResult:
             target=target,
             evaluations=tuple(evaluations),
             workspace_diff=diff,
-            started_at=_field_str(data, "started_at") or "",
-            finished_at=_field_str(data, "finished_at") or "",
+            started_at=_field_str(data, "started_at", default=""),
+            finished_at=_field_str(data, "finished_at", default=""),
             schema_version=version,
         )
     except CorruptResultError:

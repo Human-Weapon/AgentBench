@@ -9,6 +9,8 @@
 | 2 | second Codex audit of `0ad5bfeed` | D — NOT RELEASE READY | AB2-001..007 |
 | 2b | `5d64b28482e8ff69864abb3b414c8f0b61a0f2f9` | remediating | See `remediation-round-2.md` |
 | 3 | third Codex audit of `5d64b28` | D — NOT RELEASE READY | 6 residual P1s |
-| 3b | this tree | remediating | See `remediation-round-3.md` |
+| 3b | `59d3dfca48ae1fc28a0ae9550b56509fee189b51` | remediating | See `remediation-round-3.md` |
+| 4 | fourth Codex audit of `59d3dfc` | C — FIX BEFORE PROMOTING | AB4-001..003 |
+| 4b | this tree | remediating | See `remediation-round-4.md` |
 
 No tag. No GitHub Release. No PyPI.
