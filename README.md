@@ -236,10 +236,10 @@ AgentBench imports none of its siblings at module load.
 
 | Sibling | Relationship |
 |---|---|
-| PromptGraph | represented as a variant (enabled/disabled). Not imported. |
-| AgentGear | `AgentGearEvidenceAdapter` converts supplied evidence dicts into telemetry. No hard dependency. |
-| SkillGuard | may be the *subject* of a benchmark; AgentBench does not scan malware. |
-| ProjectKaizen | may consume `summary.json` / `comparison.json`. AgentBench never writes back into a project. |
+| [PromptGraph](https://github.com/Human-Weapon/PromptGraph) | represented as a variant (enabled/disabled). Not imported. |
+| [AgentGear](https://github.com/Human-Weapon/AgentGear) | `AgentGearEvidenceAdapter` converts supplied evidence dicts into telemetry. No hard dependency. |
+| [SkillGuard](https://github.com/Human-Weapon/SkillGuard) | may be the *subject* of a benchmark; AgentBench does not scan malware. |
+| [ProjectKaizen](https://github.com/Human-Weapon/ProjectKaizen) | may consume `summary.json` / `comparison.json`. AgentBench never writes back into a project. |
 
 `agentbench status` shows which siblings happen to be installed.
 
